@@ -5,7 +5,18 @@ plugins {
 }
 
 group = "com.v0rt3x.burpmcp"
-version = "2.0.1"
+version = "2.0.6"
+
+// Pin the build to a JDK 17 toolchain on every OS (Windows / macOS / Linux).
+// Gradle auto-detects an installed JDK 17 and uses it to compile, regardless of
+// which JVM launched Gradle. This guarantees the fat JAR is always Java 17
+// bytecode and fixes the "built with Burp's bundled Java 25 -> MCP SSE ports
+// 9876/9877 silently fail to bind" problem (GitHub issue #2). If no JDK 17 is
+// found, Gradle fails with a clear, actionable error instead of silently
+// producing a broken artifact.
+kotlin {
+    jvmToolchain(17)
+}
 
 repositories {
     mavenCentral()
@@ -32,6 +43,15 @@ dependencies {
     implementation("io.ktor:ktor-server-cors:$ktorVersion")
     implementation("io.ktor:ktor-server-content-negotiation:$ktorVersion")
     implementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
+
+    // Testing — JUnit 5 via kotlin-test
+    testImplementation(kotlin("test-junit5"))
+    testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.10.2")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 tasks.compileKotlin {

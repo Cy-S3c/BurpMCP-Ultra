@@ -6,6 +6,7 @@ import burp.api.montoya.collaborator.CollaboratorPayload
 import burp.api.montoya.collaborator.Interaction
 import burp.api.montoya.collaborator.InteractionFilter
 import burp.api.montoya.collaborator.InteractionType
+import burp.api.montoya.collaborator.PayloadOption
 import burp.api.montoya.collaborator.SecretKey
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.CollaboratorClientState
@@ -121,13 +122,15 @@ class CollaboratorBridge(
                 client.generatePayload()
             }
 
+            // CollaboratorPayload.toString() already returns the full address
+            // (subdomain + server), so it must NOT be concatenated with the
+            // server address again.
             val payloadStr = payload.toString()
-            val server = client.server().address()
 
             buildJsonObject {
                 put("client_id", clientId)
                 put("payload", payloadStr)
-                put("interaction_url", "$payloadStr.$server")
+                put("interaction_url", "http://$payloadStr")
                 if (customData != null) {
                     put("custom_data", customData)
                 }
@@ -135,6 +138,55 @@ class CollaboratorBridge(
         } catch (e: Exception) {
             buildJsonObject {
                 put("error", "Failed to generate payload: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Generates a payload using Burp's DEFAULT Collaborator payload generator.
+     *
+     * Unlike [generatePayload], these payloads are linked to Burp's native
+     * Collaborator tab — any interactions appear in the Collaborator results
+     * tab that was open when the payload was generated. The trade-off: the
+     * default generator is generate-only, so these interactions CANNOT be
+     * polled through the API ([pollInteractions] will not see them); they must
+     * be read in the native Collaborator tab.
+     *
+     * @param withoutServerLocation when true, omit the server location from the payload.
+     * @return JSON with the payload string, interaction URL/id, and (when present) server + custom data.
+     */
+    fun generateDefaultPayload(withoutServerLocation: Boolean): JsonObject {
+        return try {
+            val generator = api.collaborator().defaultPayloadGenerator()
+            val payload = if (withoutServerLocation) {
+                generator.generatePayload(PayloadOption.WITHOUT_SERVER_LOCATION)
+            } else {
+                generator.generatePayload()
+            }
+
+            val payloadStr = payload.toString()
+            buildJsonObject {
+                put("payload", payloadStr)
+                put("interaction_url", "http://$payloadStr")
+                put("interaction_id", payload.id().toString())
+                payload.server().ifPresent { put("server", it.address()) }
+                payload.customData().ifPresent { put("custom_data", it) }
+                put(
+                    "note",
+                    "Linked to Burp's native Collaborator tab; interactions appear there and are NOT pollable via collaborator_poll."
+                )
+            }
+        } catch (e: UnsupportedOperationException) {
+            buildJsonObject {
+                put("error", "Collaborator API is not available in Burp Suite Community Edition")
+            }
+        } catch (e: IllegalStateException) {
+            buildJsonObject {
+                put("error", "Burp Collaborator is disabled: ${e.message}")
+            }
+        } catch (e: Exception) {
+            buildJsonObject {
+                put("error", "Failed to generate default payload: ${e.message}")
             }
         }
     }
@@ -154,19 +206,16 @@ class CollaboratorBridge(
         return try {
             val client = clientState.client as CollaboratorClient
 
+            // Fetch interactions: narrow by payloadId at the server level when
+            // provided, otherwise fetch all.
             val interactions: List<Interaction> = if (payloadId != null) {
-                val filter = when (type?.lowercase()) {
-                    "dns" -> InteractionFilter.interactionPayloadFilter(payloadId)
-                    "http" -> InteractionFilter.interactionPayloadFilter(payloadId)
-                    "smtp" -> InteractionFilter.interactionPayloadFilter(payloadId)
-                    else -> InteractionFilter.interactionPayloadFilter(payloadId)
-                }
-                client.getInteractions(filter)
+                client.getInteractions(InteractionFilter.interactionPayloadFilter(payloadId))
             } else {
                 client.getAllInteractions()
             }
 
-            // Apply type filter if specified and no payloadId filter was used
+            // Apply the type post-filter unconditionally when a type is
+            // specified, regardless of whether a payloadId filter was used.
             val filtered = if (type != null) {
                 val interactionType = when (type.lowercase()) {
                     "dns" -> InteractionType.DNS
@@ -270,7 +319,13 @@ class CollaboratorBridge(
             put("type", interaction.type().name.lowercase())
             put("id", interaction.id().toString())
             put("client_ip", interaction.clientIp().hostAddress)
+            put("client_port", interaction.clientPort())
             put("timestamp", interaction.timeStamp().toString())
+
+            // Interaction-level custom data: the ≤16-char marker embedded via
+            // generatePayload(customData), echoed back when the hit occurs.
+            val customDataOpt = interaction.customData()
+            if (customDataOpt.isPresent) put("custom_data", customDataOpt.get())
 
             when (interaction.type()) {
                 InteractionType.DNS -> {
@@ -280,7 +335,12 @@ class CollaboratorBridge(
                             if (dnsDetailsOpt.isPresent) {
                                 val dnsDetails = dnsDetailsOpt.get()
                                 put("query_type", dnsDetails.queryType().name)
-                                put("query", dnsDetails.query().toString())
+                                // query() is the raw DNS request packet (ByteArray),
+                                // not a hostname — decode the QNAME for a readable
+                                // value and keep the raw bytes as hex for forensics.
+                                val rawQuery = dnsDetails.query().bytes
+                                DnsQueryDecoder.decodeQName(rawQuery)?.let { put("query_name", it) }
+                                put("query_hex", rawQuery.joinToString("") { "%02x".format(it.toInt() and 0xFF) })
                             } else {
                                 put("error", "DNS details not available")
                             }
