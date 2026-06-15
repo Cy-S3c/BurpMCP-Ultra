@@ -246,6 +246,23 @@ data class McpActivityEntry(
 )
 
 /**
+ * A structured, deduplicated finding recorded by the agent — its working memory
+ * of confirmed/suspected issues, independent of Burp's native scanner issues.
+ *
+ * @property location Where the issue lives (e.g. "param:id", "header:X", "body").
+ */
+data class StoredFinding(
+    val id: String,
+    val type: String,
+    val severity: String,
+    val url: String,
+    val location: String,
+    val detail: String,
+    val evidence: String,
+    val createdAt: String
+)
+
+/**
  * Centralized, thread-safe state manager for all mutable runtime state.
  *
  * All collections use concurrent data structures so they can be safely
@@ -270,6 +287,9 @@ class StateManager {
 
     /** Active Collaborator clients keyed by client id. */
     val collaboratorClients = ConcurrentHashMap<String, CollaboratorClientState>()
+
+    /** Agent-recorded structured findings (deduplicated working memory). */
+    val findings = CopyOnWriteArrayList<StoredFinding>()
 
     /** Names of dynamically registered scan check extensions. */
     val registeredScanChecks = CopyOnWriteArrayList<String>()
@@ -359,6 +379,7 @@ class StateManager {
         websocketConnections.clear()
         scanTasks.clear()
         collaboratorClients.clear()
+        findings.clear()
         registeredScanChecks.clear()
         // Deregister any live scan checks before dropping their handles so
         // they don't keep running after the extension unloads.

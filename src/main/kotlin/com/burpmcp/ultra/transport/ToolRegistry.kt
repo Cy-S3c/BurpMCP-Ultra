@@ -33,6 +33,7 @@ import com.burpmcp.ultra.tools.authdiff.AuthDiffTools
 import com.burpmcp.ultra.tools.apiimport.ApiImportTools
 import com.burpmcp.ultra.tools.passiveintel.PassiveIntelTools
 import com.burpmcp.ultra.tools.jwt.JwtTools
+import com.burpmcp.ultra.tools.findings.FindingsTools
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 
 /**
@@ -147,5 +148,8 @@ object ToolRegistry {
 
         // JWT tools: analyze/forge/crack JSON Web Tokens (alg:none, RS->HS confusion, weak-secret crack)
         JwtTools.register(server, bridges.jwt)
+
+        // Findings store: the agent's deduplicated working memory of issues (add/list)
+        FindingsTools.register(server, bridges.findings)
     }
 }
