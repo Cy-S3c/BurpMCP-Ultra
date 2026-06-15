@@ -34,7 +34,8 @@ class BridgeFactory {
         val bcheck: BCheckBridge,
         val scanCheck: ScanCheckBridge,
         val apiImport: ApiImportBridge,
-        val passiveIntel: PassiveIntelBridge
+        val passiveIntel: PassiveIntelBridge,
+        val analysis: AnalysisBridge
     )
 
     companion object {
@@ -73,7 +74,8 @@ class BridgeFactory {
                 bcheck = BCheckBridge(api, stateManager),
                 scanCheck = ScanCheckBridge(api, stateManager),
                 apiImport = ApiImportBridge(api, stateManager),
-                passiveIntel = PassiveIntelBridge(api)
+                passiveIntel = PassiveIntelBridge(api),
+                analysis = AnalysisBridge(api)
             )
         }
     }

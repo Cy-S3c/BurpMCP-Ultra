@@ -23,7 +23,7 @@ class UtilitiesBridge(private val api: MontoyaApi) {
      */
     fun urlEncode(data: String, encodeAll: Boolean): String {
         return if (encodeAll) {
-            api.utilities().urlUtils().encode(data)
+            com.burpmcp.ultra.core.UrlEncoding.percentEncodeAll(data)
         } else {
             api.utilities().urlUtils().encode(data)
         }
@@ -508,69 +508,8 @@ class UtilitiesBridge(private val api: MontoyaApi) {
         }
     }
 
-    // ---------------------------------------------------------------
-    // Shell execution
-    // ---------------------------------------------------------------
-
-    /**
-     * Executes a shell command using Burp's safe shell execution API.
-     *
-     * @param command The command to execute.
-     * @param args Arguments for the command.
-     * @param timeoutMs Execution timeout in milliseconds (0 = no timeout).
-     * @param workingDir Optional working directory for the command.
-     * @return JSON object with stdout, stderr, and exit code.
-     */
-    fun shellExecute(
-        command: String,
-        args: List<String>,
-        timeoutMs: Long,
-        workingDir: String?
-    ): JsonObject {
-        val allArgs = mutableListOf(command)
-        allArgs.addAll(args)
-
-        val processBuilder = ProcessBuilder(allArgs)
-        if (workingDir != null) {
-            processBuilder.directory(java.io.File(workingDir))
-        }
-
-        val process = processBuilder.start()
-
-        val completed = if (timeoutMs > 0) {
-            process.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-        } else {
-            process.waitFor()
-            true
-        }
-
-        return if (completed) {
-            val stdout = process.inputStream.bufferedReader().readText()
-            val stderr = process.errorStream.bufferedReader().readText()
-            val exitCode = process.exitValue()
-
-            buildJsonObject {
-                put("stdout", stdout)
-                put("stderr", stderr)
-                put("exit_code", exitCode)
-                put("timed_out", false)
-                put("command", command)
-                putJsonArray("args") { args.forEach { add(it) } }
-            }
-        } else {
-            process.destroyForcibly()
-            val stdout = process.inputStream.bufferedReader().readText()
-            val stderr = process.errorStream.bufferedReader().readText()
-
-            buildJsonObject {
-                put("stdout", stdout)
-                put("stderr", stderr)
-                put("exit_code", -1)
-                put("timed_out", true)
-                put("timeout_ms", timeoutMs)
-                put("command", command)
-                putJsonArray("args") { args.forEach { add(it) } }
-            }
-        }
-    }
+    // Shell execution (shellExecute / util_shell_execute) was removed in 2.0.6.
+    // It was a raw ProcessBuilder mis-documented as "Burp's safe shell API" and,
+    // with the previously unauthenticated transports, an RCE primitive reachable
+    // from any website the operator visited. Do not reintroduce it.
 }

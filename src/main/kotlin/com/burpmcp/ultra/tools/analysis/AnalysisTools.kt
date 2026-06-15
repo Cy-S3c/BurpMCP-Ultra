@@ -1,9 +1,9 @@
 package com.burpmcp.ultra.tools.analysis
 
-import com.burpmcp.ultra.bridge.AnalysisBridge
 import com.burpmcp.ultra.bridge.BridgeFactory
 import com.burpmcp.ultra.core.asStringList
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
@@ -41,7 +41,13 @@ object AnalysisTools {
             name = "analyze_request",
             description = "Parse and analyze a raw HTTP request. Returns the method, URL, path, " +
                 "headers, cookies, parameters (URL, body, cookie), body content, and content type. " +
-                "Parameters: request (string, the raw HTTP request to analyze)."
+                "Parameters: request (string, the raw HTTP request to analyze).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("request") { put("type", "string"); put("description", "The raw HTTP request to analyze") }
+                },
+                required = listOf("request")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -50,7 +56,7 @@ object AnalysisTools {
                         content = listOf(TextContent("""{"error":"Missing required parameter: request"}""")),
                         isError = true
                     )
-                val bridge = AnalysisBridge(getBurpApi(bridges))
+                val bridge = bridges.analysis
                 val result = bridge.analyzeRequest(rawRequest)
                 CallToolResult(content = listOf(TextContent(result.toString())))
             } catch (e: Exception) {
@@ -66,7 +72,13 @@ object AnalysisTools {
             name = "analyze_response",
             description = "Parse and analyze a raw HTTP response. Returns the status code, reason " +
                 "phrase, headers, cookies (with domain, path, expiration), body, stated and " +
-                "inferred MIME types. Parameters: response (string, the raw HTTP response to analyze)."
+                "inferred MIME types. Parameters: response (string, the raw HTTP response to analyze).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("response") { put("type", "string"); put("description", "The raw HTTP response to analyze") }
+                },
+                required = listOf("response")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -75,7 +87,7 @@ object AnalysisTools {
                         content = listOf(TextContent("""{"error":"Missing required parameter: response"}""")),
                         isError = true
                     )
-                val bridge = AnalysisBridge(getBurpApi(bridges))
+                val bridge = bridges.analysis
                 val result = bridge.analyzeResponse(rawResponse)
                 CallToolResult(content = listOf(TextContent(result.toString())))
             } catch (e: Exception) {
@@ -94,7 +106,19 @@ object AnalysisTools {
                 "in the response body. For each reflection, determines the surrounding context " +
                 "(html_body, html_attribute, javascript, css, url, html_comment). " +
                 "Parameters: request (string, raw HTTP request), response (string, raw HTTP " +
-                "response), additional_values (optional array of extra strings to check for reflection)."
+                "response), additional_values (optional array of extra strings to check for reflection).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("request") { put("type", "string"); put("description", "Raw HTTP request") }
+                    putJsonObject("response") { put("type", "string"); put("description", "Raw HTTP response") }
+                    putJsonObject("additional_values") {
+                        put("type", "array")
+                        put("description", "Extra strings to check for reflection")
+                        putJsonObject("items") { put("type", "string") }
+                    }
+                },
+                required = listOf("request", "response")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -111,7 +135,7 @@ object AnalysisTools {
 
                 val additionalValues = args["additional_values"].asStringList() ?: emptyList()
 
-                val bridge = AnalysisBridge(getBurpApi(bridges))
+                val bridge = bridges.analysis
                 val result = bridge.findReflected(rawRequest, rawResponse, additionalValues)
                 CallToolResult(content = listOf(TextContent(result.toString())))
             } catch (e: Exception) {
@@ -127,7 +151,13 @@ object AnalysisTools {
             name = "analyze_extract_params",
             description = "Extract all parameters from an HTTP request including URL query params, " +
                 "body params, cookies, headers, JSON body fields (recursively flattened), and " +
-                "XML element/attribute values. Parameters: request (string, the raw HTTP request)."
+                "XML element/attribute values. Parameters: request (string, the raw HTTP request).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("request") { put("type", "string"); put("description", "The raw HTTP request") }
+                },
+                required = listOf("request")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -136,7 +166,7 @@ object AnalysisTools {
                         content = listOf(TextContent("""{"error":"Missing required parameter: request"}""")),
                         isError = true
                     )
-                val bridge = AnalysisBridge(getBurpApi(bridges))
+                val bridge = bridges.analysis
                 val result = bridge.extractParams(rawRequest)
                 CallToolResult(content = listOf(TextContent(result.toString())))
             } catch (e: Exception) {
@@ -154,7 +184,16 @@ object AnalysisTools {
                 "Returns URL parameters, body parameters, cookies, injectable headers " +
                 "(User-Agent, Referer, X-Forwarded-For, etc.), and URL path segments. " +
                 "Parameters: request (string, raw HTTP request), host (string, target hostname), " +
-                "port (number, target port), use_tls (boolean, whether to use HTTPS)."
+                "port (number, target port), use_tls (boolean, whether to use HTTPS).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("request") { put("type", "string"); put("description", "Raw HTTP request") }
+                    putJsonObject("host") { put("type", "string"); put("description", "Target hostname") }
+                    putJsonObject("port") { put("type", "integer"); put("description", "Target port") }
+                    putJsonObject("use_tls") { put("type", "boolean"); put("description", "Whether to use HTTPS") }
+                },
+                required = listOf("request", "host", "port")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -175,7 +214,7 @@ object AnalysisTools {
                     )
                 val useTls = args["use_tls"]?.jsonPrimitive?.booleanOrNull ?: false
 
-                val bridge = AnalysisBridge(getBurpApi(bridges))
+                val bridge = bridges.analysis
                 val result = bridge.getInsertionPoints(rawRequest, host, port, useTls)
                 CallToolResult(content = listOf(TextContent(result.toString())))
             } catch (e: Exception) {
@@ -194,7 +233,15 @@ object AnalysisTools {
                 "For responses: compares status code, headers, body, and MIME types. " +
                 "Returns a similarity percentage based on bigram overlap. " +
                 "Parameters: item1 (string, first raw HTTP message), item2 (string, second raw " +
-                "HTTP message), type (string, 'request' or 'response')."
+                "HTTP message), type (string, 'request' or 'response').",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("item1") { put("type", "string"); put("description", "First raw HTTP message") }
+                    putJsonObject("item2") { put("type", "string"); put("description", "Second raw HTTP message") }
+                    putJsonObject("type") { put("type", "string"); put("description", "'request' or 'response'") }
+                },
+                required = listOf("item1", "item2", "type")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -214,7 +261,7 @@ object AnalysisTools {
                         isError = true
                     )
 
-                val bridge = AnalysisBridge(getBurpApi(bridges))
+                val bridge = bridges.analysis
                 val result = bridge.diff(item1, item2, type)
                 CallToolResult(content = listOf(TextContent(result.toString())))
             } catch (e: Exception) {
@@ -233,7 +280,15 @@ object AnalysisTools {
                 "or patterns across all captured traffic. " +
                 "Parameters: pattern (string, regex pattern to search for), " +
                 "max_results (number, maximum matches to return; defaults to 50), " +
-                "in_scope_only (boolean, restrict to in-scope URLs; defaults to false)."
+                "in_scope_only (boolean, restrict to in-scope URLs; defaults to false).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("pattern") { put("type", "string"); put("description", "Regex pattern to search for") }
+                    putJsonObject("max_results") { put("type", "integer"); put("description", "Maximum matches to return (default 50)") }
+                    putJsonObject("in_scope_only") { put("type", "boolean"); put("description", "Restrict to in-scope URLs (default false)") }
+                },
+                required = listOf("pattern")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -245,7 +300,7 @@ object AnalysisTools {
                 val maxResults = args["max_results"]?.jsonPrimitive?.intOrNull ?: 50
                 val inScopeOnly = args["in_scope_only"]?.jsonPrimitive?.booleanOrNull ?: false
 
-                val bridge = AnalysisBridge(getBurpApi(bridges))
+                val bridge = bridges.analysis
                 val result = bridge.searchResponseBodies(pattern, maxResults, inScopeOnly)
                 CallToolResult(content = listOf(TextContent(result.toString())))
             } catch (e: Exception) {
@@ -257,14 +312,4 @@ object AnalysisTools {
         }
     }
 
-    /**
-     * Extracts the MontoyaApi from the bridges container by using reflection
-     * on one of the known bridges. This avoids modifying the Bridges data class.
-     */
-    private fun getBurpApi(bridges: BridgeFactory.Bridges): burp.api.montoya.MontoyaApi {
-        // Use reflection to get the 'api' field from BurpSuiteBridge
-        val field = bridges.burpSuite.javaClass.getDeclaredField("api")
-        field.isAccessible = true
-        return field.get(bridges.burpSuite) as burp.api.montoya.MontoyaApi
-    }
 }
