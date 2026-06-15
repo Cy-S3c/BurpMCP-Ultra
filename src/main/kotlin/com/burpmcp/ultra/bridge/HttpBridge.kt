@@ -3,6 +3,7 @@ package com.burpmcp.ultra.bridge
 import burp.api.montoya.MontoyaApi
 import burp.api.montoya.http.HttpMode
 import burp.api.montoya.http.HttpService
+import burp.api.montoya.http.message.params.HttpParameter
 import com.burpmcp.ultra.safety.HeaderSafety
 import com.burpmcp.ultra.safety.SafeRegex
 import com.burpmcp.ultra.safety.ScopeDecision
@@ -20,6 +21,7 @@ import burp.api.montoya.http.message.responses.HttpResponse
 import burp.api.montoya.http.message.responses.analysis.ResponseVariationsAnalyzer
 import burp.api.montoya.core.ByteArray as BurpByteArray
 import com.burpmcp.ultra.events.EventBus
+import com.burpmcp.ultra.state.SessionRule
 import com.burpmcp.ultra.state.StateManager
 import com.burpmcp.ultra.state.TrafficRule
 import com.burpmcp.ultra.transport.ToolCallTracker
@@ -563,7 +565,29 @@ class HttpBridge(
                     })
                 }
 
-                return if (matchingRules.isEmpty()) {
+                var sessionChanged = false
+
+                // Session-handling rules: inject previously-extracted values into the request.
+                val reqUrl = requestToBeSent.url()
+                for (rule in stateManager.sessionRules) {
+                    if (!rule.enabled) continue
+                    val value = rule.lastExtractedValue ?: continue
+                    val suiteInScope = try { api.scope().isInScope(reqUrl) } catch (_: Exception) { false }
+                    if (!SessionRuleEngine.inScope(rule, reqUrl, suiteInScope)) continue
+                    val before = currentRequest
+                    currentRequest = applySessionInjection(rule, currentRequest, value)
+                    if (currentRequest !== before) {
+                        sessionChanged = true
+                        eventBus.emit("session.rule.injected", buildJsonObject {
+                            put("rule", rule.ruleName)
+                            put("url", reqUrl)
+                            put("inject_into", rule.injectInto)
+                            put("timestamp", Instant.now().toString())
+                        })
+                    }
+                }
+
+                return if (matchingRules.isEmpty() && !sessionChanged) {
                     RequestToBeSentAction.continueWith(requestToBeSent)
                 } else {
                     RequestToBeSentAction.continueWith(currentRequest, currentAnnotations)
@@ -592,6 +616,26 @@ class HttpBridge(
                     })
                 }
 
+                // Session-handling rules: extract token/CSRF values for later injection.
+                val respUrl = try { responseReceived.initiatingRequest()?.url() ?: "" } catch (_: Exception) { "" }
+                for (rule in stateManager.sessionRules) {
+                    if (!rule.enabled) continue
+                    val suiteInScope = try { api.scope().isInScope(respUrl) } catch (_: Exception) { false }
+                    if (!SessionRuleEngine.inScope(rule, respUrl, suiteInScope)) continue
+                    val headerValue = if (rule.extractFrom.equals("header", true) && rule.extractHeaderName != null)
+                        try { currentResponse.headerValue(rule.extractHeaderName) } catch (_: Exception) { null } else null
+                    val body = try { currentResponse.bodyToString() } catch (_: Exception) { "" }
+                    val extracted = SessionRuleEngine.extract(rule, headerValue, body)
+                    if (extracted != null && extracted != rule.lastExtractedValue) {
+                        rule.lastExtractedValue = extracted
+                        eventBus.emit("session.rule.extracted", buildJsonObject {
+                            put("rule", rule.ruleName)
+                            put("url", respUrl)
+                            put("timestamp", Instant.now().toString())
+                        })
+                    }
+                }
+
                 return if (matchingRules.isEmpty()) {
                     ResponseReceivedAction.continueWith(responseReceived)
                 } else {
@@ -600,6 +644,32 @@ class HttpBridge(
             }
         }
     }
+
+    // ---------------------------------------------------------------
+    // Session-handling rule application
+    // ---------------------------------------------------------------
+
+    /**
+     * Injects a rendered session value into [request] per the rule's
+     * `injectInto` target. Header injection is CRLF-validated; cookie/body use
+     * upsert semantics so repeated requests don't accumulate duplicates.
+     */
+    private fun applySessionInjection(rule: SessionRule, request: HttpRequest, value: String): HttpRequest {
+        val rendered = SessionRuleEngine.render(rule.injectValueTemplate, value)
+        return when (rule.injectInto.lowercase()) {
+            "header" ->
+                if (HeaderSafety.isValidHeaderName(rule.injectName) && HeaderSafety.isValidHeaderValue(rendered))
+                    request.withUpdatedHeader(rule.injectName, rendered)
+                else request
+            "cookie" -> upsertParam(request, HttpParameter.cookieParameter(rule.injectName, rendered))
+            "body" -> upsertParam(request, HttpParameter.bodyParameter(rule.injectName, rendered))
+            else -> request
+        }
+    }
+
+    private fun upsertParam(request: HttpRequest, param: HttpParameter): HttpRequest =
+        if (request.hasParameter(param.name(), param.type())) request.withUpdatedParameters(param)
+        else request.withAddedParameters(param)
 
     // ---------------------------------------------------------------
     // Traffic rule matching helpers
