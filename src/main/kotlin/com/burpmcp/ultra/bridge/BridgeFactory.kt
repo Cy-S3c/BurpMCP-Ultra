@@ -37,7 +37,8 @@ class BridgeFactory {
         val passiveIntel: PassiveIntelBridge,
         val analysis: AnalysisBridge,
         val jwt: JwtBridge,
-        val findings: FindingsBridge
+        val findings: FindingsBridge,
+        val recon: ReconBridge
     )
 
     companion object {
@@ -79,7 +80,8 @@ class BridgeFactory {
                 passiveIntel = PassiveIntelBridge(api),
                 analysis = AnalysisBridge(api),
                 jwt = JwtBridge(),
-                findings = FindingsBridge(stateManager)
+                findings = FindingsBridge(stateManager),
+                recon = ReconBridge(api)
             )
         }
     }
