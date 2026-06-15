@@ -32,42 +32,19 @@ import com.burpmcp.ultra.tools.scancheck.ScanCheckTools
 import com.burpmcp.ultra.tools.authdiff.AuthDiffTools
 import com.burpmcp.ultra.tools.apiimport.ApiImportTools
 import com.burpmcp.ultra.tools.passiveintel.PassiveIntelTools
+import com.burpmcp.ultra.tools.jwt.JwtTools
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 
 /**
- * Central registry that wires all 134 MCP tools onto an MCP [Server].
+ * Central registry that wires every MCP tool onto an MCP [Server].
  *
  * Each tool category is implemented as a standalone object with a
  * `register(server, bridge, ...)` function. This keeps tool definitions
  * modular while giving the registry a single place to invoke them all.
  *
- * Tool categories and approximate counts:
- * - Proxy:        14 tools
- * - HTTP:          6 tools
- * - Scanner:       9 tools
- * - Collaborator:  5 tools
- * - Repeater:      3 tools
- * - Intruder:      5 tools
- * - Sitemap:       4 tools
- * - Scope:         5 tools
- * - Comparer:      2 tools
- * - Decoder:       4 tools
- * - Organizer:     3 tools
- * - WebSocket:     8 tools
- * - BurpSuite:     6 tools
- * - Utilities:     6 tools
- * - AI:            3 tools
- * - Bambda:        4 tools
- * - Persistence:   4 tools
- * - Project:       3 tools
- * - Logging:       3 tools
- * - Events:        5 tools
- * - Analysis:      7 tools
- * - Config:        4 tools
- * - Session:       5 tools
- * - Extension:     3 tools
- * - BCheck:        5 tools
- * - ScanCheck:     5 tools
+ * The authoritative tool count is `server.tools.size` after [registerAll]
+ * (exposed via [McpServerManager.registeredCounts]); do not hardcode a number
+ * here — earlier copies drifted to 137/134/121 and lied to operators.
  */
 object ToolRegistry {
 
@@ -167,5 +144,8 @@ object ToolRegistry {
 
         // Passive Intel tools: scan proxy history for leaked secrets, tokens, internal URLs, etc.
         PassiveIntelTools.register(server, bridges.passiveIntel)
+
+        // JWT tools: analyze/forge/crack JSON Web Tokens (alg:none, RS->HS confusion, weak-secret crack)
+        JwtTools.register(server, bridges.jwt)
     }
 }
