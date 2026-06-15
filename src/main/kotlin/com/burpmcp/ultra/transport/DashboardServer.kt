@@ -20,6 +20,7 @@ class DashboardServer(
     private val bridges: BridgeFactory.Bridges,
     private val eventBus: EventBus,
     private val stateManager: StateManager,
+    private val authToken: String,
     private val port: Int = 9878,
     private val logging: Logging
 ) {
@@ -31,16 +32,27 @@ class DashboardServer(
         scope.launch {
             try {
                 server = embeddedServer(CIO, port = port, host = "127.0.0.1") {
-                    install(CORS) {
-                        anyHost()
-                        allowMethod(HttpMethod.Get)
-                        allowNonSimpleContentTypes = true
-                    }
+                    // Host-header allowlist + locked CORS + token auth. "/" is
+                    // token-exempt (so the browser can load the page); the page
+                    // then injects the token for its own /api + /events calls.
+                    installLocalhostSecurity(authToken, listOf(port), tokenExemptPaths = setOf("/"))
                     install(SSE)
 
                     routing {
-                        // Dashboard HTML
+                        // Dashboard HTML. Its same-origin /api + /events calls authenticate
+                        // with an HttpOnly, SameSite=Strict cookie set here — NOT a token in
+                        // the URL (URLs leak via browser history / Referer / access logs). The
+                        // browser sends this cookie automatically on same-origin fetch + SSE.
                         get("/") {
+                            call.response.cookies.append(
+                                Cookie(
+                                    name = "mcp_token",
+                                    value = authToken,
+                                    path = "/",
+                                    httpOnly = true,
+                                    extensions = mapOf("SameSite" to "Strict")
+                                )
+                            )
                             call.respondText(getDashboardHtml(), ContentType.Text.Html)
                         }
 
@@ -272,6 +284,7 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 .method-PATCH{background:rgba(188,140,255,0.15);color:var(--accent-purple);}
 .method-OPTIONS{background:rgba(72,79,88,0.3);color:var(--text-muted);}
 .method-HEAD{background:rgba(72,79,88,0.3);color:var(--text-muted);}
+.method-tool{background:rgba(63,185,80,0.2);color:var(--accent-green);font-size:9px;letter-spacing:0.2px;}
 .status-code{font-size:10.5px;font-weight:600;padding:1px 5px;border-radius:3px;text-align:center;min-width:28px;}
 .status-2xx{color:var(--accent-green);background:rgba(63,185,80,0.1);}
 .status-3xx{color:var(--accent-blue);background:rgba(88,166,255,0.1);}
@@ -375,6 +388,8 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
     <div class="stat-pill data"><span class="stat-num" id="sData">0</span><span class="stat-label">Data</span></div>
     <div class="stats-sep"></div>
     <div class="stat-pill findings"><span class="stat-num" id="sFindings">0</span><span class="stat-label">Findings</span></div>
+    <div class="stats-sep"></div>
+    <div class="stat-pill scope" style="border-color:rgba(63,185,80,0.3);"><span class="stat-num" id="sToolCalls">0</span><span class="stat-label">MCP Calls</span></div>
     <div class="stat-pill hidden"><span class="stat-num" id="sHidden">0</span><span class="stat-label">Noise</span></div>
     <div class="stat-uptime" id="statUptime"></div>
 </div>
@@ -506,7 +521,7 @@ var noiseHidden = localStorage.getItem('burpmcp_noise') !== 'show';
 var activeFilter = 'all';
 var searchQuery = '';
 var selectedEventId = null;
-var counters = {events:0,scope:0,api:0,auth:0,params:0,upload:0,admin:0,data:0,findings:0,hidden:0};
+var counters = {events:0,scope:0,api:0,auth:0,params:0,upload:0,admin:0,data:0,findings:0,hidden:0,toolCalls:0};
 var knownHosts = {};
 
 // ---- DOM refs ----
@@ -577,6 +592,17 @@ function addEvent(type, data, timestamp) {
         inScope = data.in_scope || false;
         messageId = data.message_id || 0;
         mimeType = data.mime_type || '';
+
+        // For tool.called events, extract tool name as method-like display
+        if (type === 'tool.called') {
+            var toolName = data.tool_name || '';
+            if (!method) method = toolName;
+            if (!url && data.arguments) {
+                url = data.arguments.url || data.arguments.raw_request || '';
+                if (url.length > 100) url = url.substring(0, 100) + '...';
+            }
+            if (!host && data.arguments && data.arguments.host) host = data.arguments.host;
+        }
     }
 
     var isNoisy = isNoise(url);
@@ -608,6 +634,17 @@ function addEvent(type, data, timestamp) {
     } else if (cat === 'websocket') {
         label = (data && data.url) ? data.url : type;
         vectors = ['ws'];
+    } else if (type === 'tool.called' && data) {
+        var tn = data.tool_name || 'unknown';
+        var dur = data.duration_ms || 0;
+        var isErr = data.is_error || false;
+        label = tn + ' (' + dur + 'ms)' + (isErr ? ' ERROR' : '');
+        vectors = ['tool'];
+        // Use URL/method/status from the tool event data if available
+        if (data.url) url = data.url;
+        if (data.method && data.method !== tn) method = data.method;
+        if (data.host) host = data.host;
+        if (data.status_code) statusCode = data.status_code;
     } else if (!url && typeof data === 'object') {
         label = JSON.stringify(data).substring(0, 120);
     }
@@ -641,6 +678,7 @@ function addEvent(type, data, timestamp) {
     if (host && !knownHosts[host]) { knownHosts[host] = !isNoisy; if (!isNoisy) counters.scope++; }
     vectors.forEach(function(v) { if (counters[v] !== undefined) counters[v]++; });
     if (cat === 'scanner') counters.findings++;
+    if (type === 'tool.called') counters.toolCalls++;
 
     updateCounterDisplay();
 
@@ -651,6 +689,7 @@ function addEvent(type, data, timestamp) {
 }
 
 function mapTypeToCategory(type) {
+    if (type === 'tool.called') return 'tool';
     if (type.indexOf('proxy') !== -1) return 'proxy';
     if (type.indexOf('scanner') !== -1) return 'scanner';
     if (type.indexOf('scope') !== -1) return 'scope';
@@ -680,6 +719,7 @@ function updateCounterDisplay() {
     document.getElementById('sData').textContent = counters.data;
     document.getElementById('sFindings').textContent = counters.findings;
     document.getElementById('sHidden').textContent = counters.hidden;
+    document.getElementById('sToolCalls').textContent = counters.toolCalls;
 }
 
 // ---- Render full list (for filter changes) ----
@@ -740,10 +780,11 @@ function buildEventRow(evt) {
     // URL/label area
     var urlArea = document.createElement('span');
     urlArea.className = 'activity-url';
-    if (evt.method && evt.url) {
-        // Method badge
+    if (evt.method && (evt.url || evt.category === 'tool')) {
+        // Method badge — for tool events, show tool name
         var mb = document.createElement('span');
-        mb.className = 'method-badge method-' + evt.method;
+        var isToolEvt = evt.category === 'tool' && evt.type === 'tool.called';
+        mb.className = isToolEvt ? 'method-badge method-tool' : ('method-badge method-' + evt.method);
         mb.textContent = evt.method;
         urlArea.appendChild(mb);
         urlArea.appendChild(document.createTextNode(' '));
@@ -961,12 +1002,14 @@ function showToast(msg) {
 
 function clearAll() {
     events = [];
-    counters = {events:0,scope:0,api:0,auth:0,params:0,upload:0,admin:0,data:0,findings:0,hidden:0};
+    counters = {events:0,scope:0,api:0,auth:0,params:0,upload:0,admin:0,data:0,findings:0,hidden:0,toolCalls:0};
     knownHosts = {};
     updateCounterDisplay();
     closeDetail();
     renderList();
 }
+
+// ---- Auth: the mcp_token cookie (HttpOnly, SameSite=Strict) is sent automatically ----
 
 // ---- SSE Connection ----
 function connectSSE() {
@@ -982,7 +1025,8 @@ function connectSSE() {
 
     var eventTypes = ['proxy.request','proxy.response','scanner.issue','scanner.task.status',
         'scope.changed','collaborator.interaction','websocket.created','websocket.message',
-        'websocket.closed','http.request','http.response','proxy.intercept','proxy.rule.applied'];
+        'websocket.closed','http.request','http.response','proxy.intercept','proxy.rule.applied',
+        'tool.called'];
 
     eventTypes.forEach(function(evtType) {
         es.addEventListener(evtType, function(e) {
