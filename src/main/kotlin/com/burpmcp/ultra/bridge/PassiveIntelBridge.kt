@@ -53,6 +53,20 @@ class PassiveIntelBridge(private val api: MontoyaApi) {
     )
 
     /**
+     * High-false-positive patterns excluded from the default scan; reported only
+     * when explicitly named in `categories` (e.g. UUIDs, emails, phone numbers
+     * appear everywhere and are rarely the secret you're hunting).
+     */
+    private val optInOnly = setOf("email_address", "phone_number", "heroku_api_key")
+
+    /**
+     * Patterns whose match must clear a Shannon-entropy bar (bits/char) to be
+     * reported — kills "bearer test" / "basic dGVzdA==" style noise while keeping
+     * real high-entropy tokens.
+     */
+    private val entropyGate = mapOf("bearer_token" to 3.0, "basic_auth" to 3.0)
+
+    /**
      * Scan proxy history for sensitive data patterns.
      *
      * @param maxItems Max proxy history items to scan
@@ -89,7 +103,7 @@ class PassiveIntelBridge(private val api: MontoyaApi) {
             val activePatterns = if (categories != null && categories.isNotEmpty()) {
                 patterns.filter { (key, _) -> categories.any { cat -> key.contains(cat, ignoreCase = true) } }
             } else {
-                patterns
+                patterns.filterKeys { it !in optInOnly }
             }
 
             // Scan
@@ -110,28 +124,20 @@ class PassiveIntelBridge(private val api: MontoyaApi) {
 
                 for ((patternName, regex) in activePatterns) {
                     try {
-                        // Check request
-                        for (match in regex.findAll(requestText)) {
-                            val finding = buildJsonObject {
+                        val threshold = entropyGate[patternName]
+                        fun addMatch(value: String, location: String) {
+                            // Entropy gate: drop low-entropy noise (e.g. "bearer test") for gated patterns.
+                            if (threshold != null && com.burpmcp.ultra.core.Entropy.shannon(value) < threshold) return
+                            findings.getOrPut(patternName) { mutableListOf() }.add(buildJsonObject {
                                 put("pattern", patternName)
-                                put("match", match.value.take(200))
-                                put("location", "request")
+                                put("match", value.take(200))
+                                put("location", location)
                                 put("url", url)
                                 put("host", host)
-                            }
-                            findings.getOrPut(patternName) { mutableListOf() }.add(finding)
+                            })
                         }
-                        // Check response
-                        for (match in regex.findAll(responseText)) {
-                            val finding = buildJsonObject {
-                                put("pattern", patternName)
-                                put("match", match.value.take(200))
-                                put("location", "response")
-                                put("url", url)
-                                put("host", host)
-                            }
-                            findings.getOrPut(patternName) { mutableListOf() }.add(finding)
-                        }
+                        for (match in regex.findAll(requestText)) addMatch(match.value, "request")
+                        for (match in regex.findAll(responseText)) addMatch(match.value, "response")
                     } catch (_: Exception) {
                         // Skip this pattern on failure, continue with others
                     }
