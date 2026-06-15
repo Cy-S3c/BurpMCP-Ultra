@@ -101,11 +101,13 @@ This tool hands an LLM the ability to send arbitrary requests anywhere, rewrite 
 Each item carries its finding ID from §1–§4 so coverage is traceable. IDs:
 S1-S8 (§1 security), C1-C9 (§2 correctness), M1-M5 (§2 misplaced), N1-N12 (§3 new), D1-D8 (§4 depth).
 
-> **Progress (2026-06-15) — shipped & verified (build green, 35 unit tests):**
-> - ✅ **S1** scope gate, **C2** ReDoS-safe regex, **C3** CRLF validation, **M3** shared rule helpers — commit `b3f8d94`
-> - ✅ **C1** session rules now actually applied (was a no-op) — commit `9376b97`
-> - ✅ **M1** AnalysisBridge first-class (reflection removed), **C8** urlEncode encodeAll — commit `1633ad8`
-> - ⏳ Remaining P0/P0.5: S2, S3, C4, C5, C6, C7, C9, M2, M4, S7. Then P1 (③/④), P2, P3.
+> **Progress (2026-06-15) — shipped & verified (build green, 50 unit tests). All four review areas now have landed work:**
+> - ① ✅ **S1** scope gate, **C2** ReDoS-safe regex, **C3** CRLF validation, **M3** shared rule helpers — `b3f8d94`
+> - ② ✅ **C1** session rules now actually applied (was a no-op) — `9376b97`
+> - ② ✅ **M1** AnalysisBridge first-class (reflection removed), **C8** urlEncode encodeAll — `1633ad8`
+> - ③ ✅ **N1** `jwt_attack` tool (alg:none, RS→HS confusion, secret crack, analysis) — `1e43d1a`
+> - ④ ✅ **D1** API-import `$ref`/allOf/enum resolution (imported bodies are real now) — `2df0819`
+> - ⏳ Remaining: ① S2, S3, C4, C5, S5 · ② C6, C7, C9, M2, M4, S7 · ③ N2-N12 · ④ D2, D4, D5, D6, D7, D8 · then P2, P3.
 
 **P0 — safety & correctness (do first; small, high-impact, verified):**
 1. Scope gate on all outbound HTTP (operator-controlled). — **S1**
