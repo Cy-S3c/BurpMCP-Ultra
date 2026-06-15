@@ -1,6 +1,10 @@
 package com.burpmcp.ultra.state
 
+import burp.api.montoya.core.Registration
+import burp.api.montoya.http.message.HttpRequestResponse
+import burp.api.montoya.http.message.requests.HttpRequest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 
@@ -123,7 +127,17 @@ data class WebSocketConnection(
     val messagesSent: AtomicLong = AtomicLong(0),
     val messagesReceived: AtomicLong = AtomicLong(0),
     val messages: CopyOnWriteArrayList<WebSocketMessage> = CopyOnWriteArrayList()
-)
+) {
+    /** Appends [message], evicting the oldest beyond [MAX_MESSAGES] so a busy socket can't exhaust memory. */
+    fun record(message: WebSocketMessage) {
+        messages.add(message)
+        while (messages.size > MAX_MESSAGES) {
+            try { messages.removeAt(0) } catch (_: Exception) { break }
+        }
+    }
+
+    companion object { const val MAX_MESSAGES = 2000 }
+}
 
 /**
  * A single WebSocket message within a [WebSocketConnection].
@@ -201,6 +215,37 @@ data class WebSocketInterceptRule(
 )
 
 /**
+ * A record of an MCP tool invocation, stored for UI display and Burp tool integration.
+ *
+ * @property id Monotonically increasing id for ordering.
+ * @property toolName The MCP tool that was called.
+ * @property timestamp ISO-8601 timestamp.
+ * @property durationMs How long the call took.
+ * @property method HTTP method (if applicable).
+ * @property url Target URL (if applicable).
+ * @property host Target host (if applicable).
+ * @property statusCode HTTP response status (if applicable).
+ * @property isError Whether the tool call returned an error.
+ * @property argsSummary Truncated JSON of the tool arguments.
+ * @property resultSummary Truncated JSON of the tool result.
+ * @property requestResponse The actual Burp HttpRequestResponse (if this was an HTTP tool).
+ */
+data class McpActivityEntry(
+    val id: Long,
+    val toolName: String,
+    val timestamp: String,
+    val durationMs: Long,
+    val method: String,
+    val url: String,
+    val host: String,
+    val statusCode: Int,
+    val isError: Boolean,
+    val argsSummary: String,
+    val resultSummary: String,
+    val requestResponse: HttpRequestResponse? = null
+)
+
+/**
  * Centralized, thread-safe state manager for all mutable runtime state.
  *
  * All collections use concurrent data structures so they can be safely
@@ -229,11 +274,69 @@ class StateManager {
     /** Names of dynamically registered scan check extensions. */
     val registeredScanChecks = CopyOnWriteArrayList<String>()
 
+    /**
+     * Montoya [Registration] handles for scan checks registered via
+     * [com.burpmcp.ultra.bridge.ScannerBridge.registerScanCheck], keyed by
+     * check name. Retained so the registration is not leaked and the check
+     * can be deregistered later (individually or on extension unload).
+     */
+    val scanCheckRegistrations = ConcurrentHashMap<String, Registration>()
+
     /** Names of dynamically registered payload processors. */
     val registeredPayloadProcessors = CopyOnWriteArrayList<String>()
 
     /** Rules for WebSocket message interception. */
     val websocketInterceptRules = CopyOnWriteArrayList<WebSocketInterceptRule>()
+
+    /** Recent MCP tool call activity entries for the native Burp UI tab. */
+    val mcpActivity = ConcurrentLinkedDeque<McpActivityEntry>()
+    private val mcpActivityIdCounter = AtomicLong(0)
+
+    /** Listeners notified when new MCP activity entries are added. */
+    val mcpActivityListeners = CopyOnWriteArrayList<(McpActivityEntry) -> Unit>()
+
+    /** Maximum number of MCP activity entries retained. */
+    private val maxMcpActivityEntries = 2000
+
+    /**
+     * Records a new MCP tool call activity entry and notifies listeners.
+     */
+    fun addMcpActivity(
+        toolName: String,
+        timestamp: String,
+        durationMs: Long,
+        method: String,
+        url: String,
+        host: String,
+        statusCode: Int,
+        isError: Boolean,
+        argsSummary: String,
+        resultSummary: String,
+        requestResponse: HttpRequestResponse? = null
+    ): McpActivityEntry {
+        val entry = McpActivityEntry(
+            id = mcpActivityIdCounter.incrementAndGet(),
+            toolName = toolName,
+            timestamp = timestamp,
+            durationMs = durationMs,
+            method = method,
+            url = url,
+            host = host,
+            statusCode = statusCode,
+            isError = isError,
+            argsSummary = argsSummary,
+            resultSummary = resultSummary,
+            requestResponse = requestResponse
+        )
+        mcpActivity.addFirst(entry)
+        while (mcpActivity.size > maxMcpActivityEntries) {
+            mcpActivity.pollLast()
+        }
+        mcpActivityListeners.forEach { listener ->
+            try { listener(entry) } catch (_: Exception) {}
+        }
+        return entry
+    }
 
     private val idCounter = AtomicLong(0)
 
@@ -257,7 +360,15 @@ class StateManager {
         scanTasks.clear()
         collaboratorClients.clear()
         registeredScanChecks.clear()
+        // Deregister any live scan checks before dropping their handles so
+        // they don't keep running after the extension unloads.
+        scanCheckRegistrations.values.forEach { reg ->
+            try { reg.deregister() } catch (_: Exception) {}
+        }
+        scanCheckRegistrations.clear()
         registeredPayloadProcessors.clear()
         websocketInterceptRules.clear()
+        mcpActivity.clear()
+        mcpActivityListeners.clear()
     }
 }

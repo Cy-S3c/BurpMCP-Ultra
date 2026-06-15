@@ -159,7 +159,7 @@ class WebSocketBridge(
             length = message.toByteArray().size,
             timestamp = Instant.now().toString()
         )
-        connection.messages.add(wsMessage)
+        connection.record(wsMessage)
 
         // Emit message event
         eventBus.emit("websocket.message", buildJsonObject {
@@ -213,7 +213,7 @@ class WebSocketBridge(
             length = decodedBytes.size,
             timestamp = Instant.now().toString()
         )
-        connection.messages.add(wsMessage)
+        connection.record(wsMessage)
 
         // Emit message event
         eventBus.emit("websocket.message", buildJsonObject {
@@ -397,7 +397,7 @@ class WebSocketBridge(
                         length = payload.toByteArray().size,
                         timestamp = Instant.now().toString()
                     )
-                    connection.messages.add(wsMessage)
+                    connection.record(wsMessage)
 
                     // Emit message event
                     eventBus.emit("websocket.message", buildJsonObject {
@@ -409,7 +409,12 @@ class WebSocketBridge(
                         put("timestamp", Instant.now().toString())
                     })
 
-                    return TextMessageAction.continueWith(textMessage)
+                    // Apply intercept rules: drop, modify, or pass through.
+                    return when (val outcome = evaluateTextRules(url, direction, payload)) {
+                        is TextRuleOutcome.Drop -> TextMessageAction.drop()
+                        is TextRuleOutcome.Modify -> TextMessageAction.continueWith(outcome.payload)
+                        is TextRuleOutcome.Continue -> TextMessageAction.continueWith(textMessage)
+                    }
                 }
 
                 override fun handleBinaryMessage(binaryMessage: BinaryMessage): BinaryMessageAction {
@@ -437,7 +442,7 @@ class WebSocketBridge(
                         length = rawBytes.size,
                         timestamp = Instant.now().toString()
                     )
-                    connection.messages.add(wsMessage)
+                    connection.record(wsMessage)
 
                     // Emit message event
                     eventBus.emit("websocket.message", buildJsonObject {
@@ -449,7 +454,12 @@ class WebSocketBridge(
                         put("timestamp", Instant.now().toString())
                     })
 
-                    return BinaryMessageAction.continueWith(binaryMessage)
+                    // Apply intercept rules: binary supports drop / passthrough only.
+                    return if (shouldDropBinary(url, direction)) {
+                        BinaryMessageAction.drop()
+                    } else {
+                        BinaryMessageAction.continueWith(binaryMessage)
+                    }
                 }
 
                 override fun onClose() {
@@ -553,7 +563,7 @@ class WebSocketBridge(
                     length = payload.toByteArray().size,
                     timestamp = Instant.now().toString()
                 )
-                connection.messages.add(wsMessage)
+                connection.record(wsMessage)
 
                 eventBus.emit("websocket.message", buildJsonObject {
                     put("connection_id", connectionId)
@@ -563,6 +573,15 @@ class WebSocketBridge(
                     put("length", payload.length)
                     put("timestamp", Instant.now().toString())
                 })
+
+                // Evaluate intercept rules. This is a receive-only callback
+                // (ExtensionWebSocketMessageHandler.textMessageReceived returns
+                // void), so the Montoya API cannot drop or rewrite the frame
+                // here. "tag" rules are honoured via their emitted event; for
+                // "drop"/"modify" matches we surface an advisory event so the
+                // rule is observable even though it cannot be enforced on this
+                // path.
+                applyIncomingRulesAdvisory(connection.url, "server_to_client", payload)
             }
 
             override fun binaryMessageReceived(binaryMessage: BinaryMessage) {
@@ -579,7 +598,7 @@ class WebSocketBridge(
                     length = rawBytes.size,
                     timestamp = Instant.now().toString()
                 )
-                connection.messages.add(wsMessage)
+                connection.record(wsMessage)
 
                 eventBus.emit("websocket.message", buildJsonObject {
                     put("connection_id", connectionId)
@@ -589,6 +608,12 @@ class WebSocketBridge(
                     put("length", rawBytes.size)
                     put("timestamp", Instant.now().toString())
                 })
+
+                // Receive-only callback: honour "tag" rules and surface an
+                // advisory event for unenforceable drop matches (see the text
+                // handler above for rationale). Binary content is not matched
+                // against matchMessage.
+                applyIncomingBinaryRulesAdvisory(connection.url, "server_to_client")
             }
 
             override fun onClose() {
@@ -605,6 +630,199 @@ class WebSocketBridge(
                 })
             }
         })
+    }
+
+    /**
+     * The outcome of evaluating intercept rules against a text message.
+     *
+     * - [Continue]: forward the message unchanged.
+     * - [Drop]: discard the message entirely.
+     * - [Modify]: forward the message with [payload] substituted as the new text.
+     */
+    private sealed class TextRuleOutcome {
+        object Continue : TextRuleOutcome()
+        object Drop : TextRuleOutcome()
+        data class Modify(val payload: String) : TextRuleOutcome()
+    }
+
+    /**
+     * Returns true if [rule] applies to a message with the given [url] and
+     * [direction] ("client_to_server" / "server_to_client"), and whose textual
+     * [content] satisfies the rule's matchMessage pattern.
+     *
+     * Null match fields mean "match any". A rule direction of "both" matches
+     * either direction. Regex compilation failures are treated as non-matches so
+     * a malformed pattern can never crash the message handler.
+     */
+    private fun ruleMatches(
+        rule: WebSocketInterceptRule,
+        url: String?,
+        direction: String,
+        content: String
+    ): Boolean {
+        // Direction filter ("both" or matching the message direction).
+        if (rule.direction != "both" && rule.direction != direction) {
+            return false
+        }
+
+        // URL filter (regex against the connection URL, if one is available).
+        rule.matchUrl?.let { pattern ->
+            val target = url ?: return false
+            val matched = try {
+                Regex(pattern).containsMatchIn(target)
+            } catch (e: Exception) {
+                false
+            }
+            if (!matched) return false
+        }
+
+        // Message-content filter (regex against the text payload).
+        rule.matchMessage?.let { pattern ->
+            val matched = try {
+                Regex(pattern).containsMatchIn(content)
+            } catch (e: Exception) {
+                false
+            }
+            if (!matched) return false
+        }
+
+        return true
+    }
+
+    /**
+     * Evaluates all enabled intercept rules against a text message and returns
+     * the resulting action. The first matching "drop" wins; otherwise "modify"
+     * rules are applied in order to the payload, and "tag" rules emit an event.
+     *
+     * @param url The WebSocket connection URL, or null if unknown.
+     * @param direction "client_to_server" or "server_to_client".
+     * @param payload The original text payload.
+     * @return A [TextRuleOutcome] describing what the caller should do.
+     */
+    private fun evaluateTextRules(
+        url: String?,
+        direction: String,
+        payload: String
+    ): TextRuleOutcome {
+        var current = payload
+        var modified = false
+
+        for (rule in stateManager.websocketInterceptRules.toList()) {
+            if (!rule.enabled) continue
+            if (!ruleMatches(rule, url, direction, current)) continue
+
+            when (rule.action) {
+                "drop" -> return TextRuleOutcome.Drop
+
+                "modify" -> {
+                    val regex = rule.modifyRegex
+                    val replacement = rule.modifyReplacement ?: ""
+                    if (regex != null) {
+                        try {
+                            current = Regex(regex).replace(current, replacement)
+                            modified = true
+                        } catch (e: Exception) {
+                            // Bad pattern: skip this rule, keep processing others.
+                        }
+                    }
+                }
+
+                "tag" -> {
+                    eventBus.emit("websocket.message_tagged", buildJsonObject {
+                        put("rule_id", rule.ruleId)
+                        put("direction", direction)
+                        if (url != null) put("url", url)
+                        if (rule.tagComment != null) put("comment", rule.tagComment)
+                        put("timestamp", Instant.now().toString())
+                    })
+                }
+            }
+        }
+
+        return if (modified) TextRuleOutcome.Modify(current) else TextRuleOutcome.Continue
+    }
+
+    /**
+     * Evaluates enabled intercept rules against a binary message. Binary payloads
+     * cannot be regex-modified, so only "drop" (and "tag", which emits an event)
+     * are honoured; everything else passes through unchanged.
+     *
+     * Rules that carry a matchMessage pattern are skipped for binary frames since
+     * there is no meaningful text content to match against.
+     *
+     * @param url The WebSocket connection URL, or null if unknown.
+     * @param direction "client_to_server" or "server_to_client".
+     * @return true if the binary message should be dropped, false to continue.
+     */
+    private fun shouldDropBinary(url: String?, direction: String): Boolean {
+        for (rule in stateManager.websocketInterceptRules.toList()) {
+            if (!rule.enabled) continue
+            // Binary frames have no text content; matchMessage cannot apply.
+            if (rule.matchMessage != null) continue
+            if (!ruleMatches(rule, url, direction, "")) continue
+
+            when (rule.action) {
+                "drop" -> return true
+                "tag" -> {
+                    eventBus.emit("websocket.message_tagged", buildJsonObject {
+                        put("rule_id", rule.ruleId)
+                        put("direction", direction)
+                        put("type", "BINARY")
+                        if (url != null) put("url", url)
+                        if (rule.tagComment != null) put("comment", rule.tagComment)
+                        put("timestamp", Instant.now().toString())
+                    })
+                }
+                // "modify" is not supported for binary frames; pass through.
+            }
+        }
+        return false
+    }
+
+    /**
+     * Applies intercept rules to an incoming text frame received on a
+     * programmatically created ExtensionWebSocket. Because that callback is
+     * receive-only (returns void), drop/modify cannot be enforced by the API;
+     * "tag" rules are fully honoured (they emit their own event), and any
+     * matching drop/modify rule produces an advisory event so it remains
+     * observable.
+     */
+    private fun applyIncomingRulesAdvisory(url: String?, direction: String, payload: String) {
+        when (evaluateTextRules(url, direction, payload)) {
+            is TextRuleOutcome.Drop -> eventBus.emit("websocket.rule_unenforceable", buildJsonObject {
+                put("direction", direction)
+                put("action", "drop")
+                put("reason", "extension_websocket_receive_only")
+                if (url != null) put("url", url)
+                put("timestamp", Instant.now().toString())
+            })
+            is TextRuleOutcome.Modify -> eventBus.emit("websocket.rule_unenforceable", buildJsonObject {
+                put("direction", direction)
+                put("action", "modify")
+                put("reason", "extension_websocket_receive_only")
+                if (url != null) put("url", url)
+                put("timestamp", Instant.now().toString())
+            })
+            is TextRuleOutcome.Continue -> { /* nothing to do */ }
+        }
+    }
+
+    /**
+     * Binary-frame counterpart to [applyIncomingRulesAdvisory]. Honours "tag"
+     * rules and emits an advisory event when a drop rule matches but cannot be
+     * enforced on the receive-only extension callback.
+     */
+    private fun applyIncomingBinaryRulesAdvisory(url: String?, direction: String) {
+        if (shouldDropBinary(url, direction)) {
+            eventBus.emit("websocket.rule_unenforceable", buildJsonObject {
+                put("direction", direction)
+                put("action", "drop")
+                put("type", "BINARY")
+                put("reason", "extension_websocket_receive_only")
+                if (url != null) put("url", url)
+                put("timestamp", Instant.now().toString())
+            })
+        }
     }
 
     /**

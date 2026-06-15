@@ -113,7 +113,7 @@ class ProxyBridge(
 
         val allItems = api.proxy().history(filter)
         val totalFiltered = allItems.size
-        val slice = allItems.drop(startIndex).take(count)
+        val slice = allItems.drop(startIndex).take(count.coerceIn(0, 1000))
 
         return buildJsonObject {
             put("total_filtered", totalFiltered)
@@ -121,7 +121,7 @@ class ProxyBridge(
             put("returned", slice.size)
             put("items", buildJsonArray {
                 slice.forEach { item ->
-                    add(serializeHistoryItem(item, includeRequest, includeResponse, maxResponseLength))
+                    add(serializeHistoryItem(item, includeRequest, includeResponse, maxResponseLength ?: 200_000))
                 }
             })
         }
@@ -174,7 +174,7 @@ class ProxyBridge(
         }
 
         val matches = api.proxy().history(filter)
-        val limited = matches.take(maxResults)
+        val limited = matches.take(maxResults.coerceIn(0, 1000))
 
         return buildJsonObject {
             put("total_matches", matches.size)
@@ -183,7 +183,7 @@ class ProxyBridge(
             put("search_in", searchIn)
             put("items", buildJsonArray {
                 limited.forEach { item ->
-                    add(serializeHistoryItem(item, includeRequest, includeResponse, maxResponseLength))
+                    add(serializeHistoryItem(item, includeRequest, includeResponse, maxResponseLength ?: 200_000))
                 }
             })
         }
@@ -223,7 +223,7 @@ class ProxyBridge(
 
         val allItems = api.proxy().webSocketHistory(filter)
         val totalFiltered = allItems.size
-        val slice = allItems.drop(startIndex).take(count)
+        val slice = allItems.drop(startIndex).take(count.coerceIn(0, 1000))
 
         return buildJsonObject {
             put("total_filtered", totalFiltered)
@@ -259,7 +259,7 @@ class ProxyBridge(
         }
 
         val matches = api.proxy().webSocketHistory(filter)
-        val limited = matches.take(maxResults)
+        val limited = matches.take(maxResults.coerceIn(0, 1000))
 
         return buildJsonObject {
             put("total_matches", matches.size)
