@@ -4,6 +4,7 @@ import burp.api.montoya.BurpExtension
 import burp.api.montoya.MontoyaApi
 import com.burpmcp.ultra.transport.McpServerManager
 import com.burpmcp.ultra.transport.DashboardServer
+import com.burpmcp.ultra.transport.SecurityConfig
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.StateManager
 import com.burpmcp.ultra.bridge.BridgeFactory
@@ -27,6 +28,15 @@ class BurpMcpUltraExtension : BurpExtension {
         // Initialize centralized state manager
         stateManager = StateManager()
 
+        // Auth token shared by all three local servers. Required on every request
+        // (header or ?token=) to defeat the "malicious website drives your localhost
+        // MCP server" attack chain. Persisted in Burp preferences so it is stable
+        // across reloads/restarts — generate once, reuse thereafter, so the operator
+        // configures their MCP client only once.
+        val prefs = api.persistence().preferences()
+        val authToken = prefs.getString("mcp_auth_token")
+            ?: SecurityConfig.generateToken().also { prefs.setString("mcp_auth_token", it) }
+
         // Create all bridge instances via factory
         val bridges = BridgeFactory.createAll(api, eventBus, stateManager)
 
@@ -35,20 +45,21 @@ class BurpMcpUltraExtension : BurpExtension {
             bridges = bridges,
             eventBus = eventBus,
             stateManager = stateManager,
+            authToken = authToken,
             ssePort = 9876,
             httpPort = 9877,
             logging = api.logging()
         )
         serverManager.start()
 
-        dashboardServer = DashboardServer(bridges, eventBus, stateManager, 9878, api.logging())
+        dashboardServer = DashboardServer(bridges, eventBus, stateManager, authToken, 9878, api.logging())
         dashboardServer.start()
 
         // Register Burp Suite event handlers for proxy, scanner, scope, websocket, and HTTP traffic
         registerBurpHandlers(bridges)
 
         // Initialize and register the UI tab
-        uiTab = BurpMcpUltraTab(api, serverManager, eventBus, stateManager)
+        uiTab = BurpMcpUltraTab(api, serverManager, eventBus, stateManager, bridges, authToken)
         api.userInterface().registerSuiteTab("BurpMCP-Ultra", uiTab.getComponent())
 
         // Register unload handler for clean shutdown
@@ -61,21 +72,22 @@ class BurpMcpUltraExtension : BurpExtension {
             api.logging().logToOutput("BurpMCP-Ultra: Extension unloaded")
         }
 
-        uiTab.log("INFO", "System", "BurpMCP-Ultra v2.0.1 started")
-        uiTab.log("INFO", "System", "SSE transport: http://127.0.0.1:9876")
-        uiTab.log("INFO", "System", "Streamable HTTP transport: http://127.0.0.1:9877")
-        uiTab.log("INFO", "System", "Dashboard: http://127.0.0.1:9878")
-        uiTab.log("INFO", "System", "Tools registered: 137 | MCP Resources: 14")
+        // Single startup banner with REAL counts (no more 137/134/121 drift, no
+        // fake "Streamable HTTP"/"stdio" claims). uiTab.log() also writes to Burp's
+        // output log, so one channel covers both surfaces.
+        val (toolCount, resourceCount) = serverManager.registeredCounts()
+        uiTab.log("INFO", "System", "BurpMCP-Ultra v2.0.6 started")
+        uiTab.log("INFO", "System", "SSE transport (primary):   http://127.0.0.1:9876/sse")
+        uiTab.log("INFO", "System", "SSE transport (secondary): http://127.0.0.1:9877/sse")
+        uiTab.log("INFO", "System", "Dashboard:                 http://127.0.0.1:9878")
+        uiTab.log("INFO", "System", "Tools: $toolCount  |  MCP Resources: $resourceCount")
+        api.logging().raiseInfoEvent("BurpMCP-Ultra v2.0.6 started (SSE 9876/9877, dashboard 9878)")
 
-        api.logging().logToOutput("BurpMCP-Ultra v2.0.1 started")
-        api.logging().logToOutput("  SSE transport:             http://127.0.0.1:9876")
-        api.logging().logToOutput("  Streamable HTTP transport:  http://127.0.0.1:9877")
-        api.logging().logToOutput("  Dashboard:                  http://127.0.0.1:9878")
-        api.logging().logToOutput("  stdio transport:            available")
-        api.logging().logToOutput("  Tools registered:           137")
-        api.logging().logToOutput("  MCP Resources:              14")
-
-        api.logging().raiseInfoEvent("BurpMCP-Ultra MCP server started on ports 9876/9877")
+        // Do NOT log the auth token. uiTab.log() also writes to Burp's shared output
+        // log, so logging the token would leak it into saved project files / screenshots.
+        // The token and a ready-to-paste MCP client config are shown ONLY in the
+        // BurpMCP-Ultra -> Server tab (same-process Swing UI), never in the log stream.
+        uiTab.log("INFO", "System", "Auth token + MCP client config are shown in the BurpMCP-Ultra -> Server tab (kept out of the log).")
     }
 
     private fun registerBurpHandlers(bridges: BridgeFactory.Bridges) {

@@ -146,4 +146,11 @@ class BurpSuiteBridge(private val api: MontoyaApi) {
             put("prompt_user", promptUser)
         }
     }
+
+    /**
+     * Operator preference (Burp pref `mcp_allow_destructive`) gating destructive
+     * tools. The agent cannot set it. Defaults to false (destructive tools blocked).
+     */
+    fun destructiveAllowed(): Boolean =
+        try { api.persistence().preferences().getBoolean("mcp_allow_destructive") ?: false } catch (_: Exception) { false }
 }
