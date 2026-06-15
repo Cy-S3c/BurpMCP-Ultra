@@ -3,6 +3,11 @@ package com.burpmcp.ultra.bridge
 import burp.api.montoya.MontoyaApi
 import burp.api.montoya.http.HttpMode
 import burp.api.montoya.http.HttpService
+import com.burpmcp.ultra.safety.HeaderSafety
+import com.burpmcp.ultra.safety.SafeRegex
+import com.burpmcp.ultra.safety.ScopeDecision
+import com.burpmcp.ultra.safety.ScopeMode
+import com.burpmcp.ultra.safety.ScopePolicy
 import burp.api.montoya.http.handler.HttpHandler
 import burp.api.montoya.http.handler.HttpRequestToBeSent
 import burp.api.montoya.http.handler.HttpResponseReceived
@@ -17,9 +22,17 @@ import burp.api.montoya.core.ByteArray as BurpByteArray
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.StateManager
 import com.burpmcp.ultra.state.TrafficRule
+import com.burpmcp.ultra.transport.ToolCallTracker
+import com.burpmcp.ultra.core.asBodyString
+import com.burpmcp.ultra.core.asStringMap
 import kotlinx.serialization.json.*
+import java.net.URI
 import java.time.Instant
 import java.time.ZonedDateTime
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * Bridge wrapping the Montoya HTTP API.
@@ -33,6 +46,19 @@ class HttpBridge(
     private val eventBus: EventBus,
     private val stateManager: StateManager
 ) {
+
+    /**
+     * Adds an HttpRequestResponse to Burp's sitemap and annotates it as MCP-originated.
+     * Called after every request sent via MCP tools so it's visible in Burp UI.
+     */
+    private fun addToSitemap(result: HttpRequestResponse, note: String = "[MCP] BurpMCP-Ultra") {
+        try {
+            api.siteMap().add(result)
+        } catch (_: Exception) {}
+        try {
+            result.annotations().setNotes(note)
+        } catch (_: Exception) {}
+    }
 
     // ---------------------------------------------------------------
     // Send request
@@ -67,24 +93,41 @@ class HttpBridge(
         useTls: Boolean?,
         httpMode: String?,
         connectionId: String?,
-        maxBodyLength: Int? = null
+        maxBodyLength: Int? = null,
+        timeoutMs: Long? = null,
+        preserveHeaders: Boolean = true,
+        autoFixContentLength: Boolean = true
     ): JsonObject {
         return try {
-            val httpRequest = buildRequest(url, method, headers, body, rawRequest, host, port, useTls)
+            val httpRequest = buildRequest(
+                url, method, headers, body, rawRequest, host, port, useTls,
+                preserveHeaders = preserveHeaders,
+                autoFixContentLength = autoFixContentLength
+            )
             val mode = resolveHttpMode(httpMode)
 
+            val targetUrl = try { httpRequest.url() } catch (_: Exception) { url ?: "" }
+            val scope = checkScope(targetUrl)
+            scope.deny?.let { return it }
+
             val startTime = System.nanoTime()
-            val result: HttpRequestResponse = if (connectionId != null) {
-                api.http().sendRequest(httpRequest, mode, connectionId)
-            } else {
-                api.http().sendRequest(httpRequest, mode)
+            val result: HttpRequestResponse = executeWithTimeout(timeoutMs) {
+                if (connectionId != null) {
+                    api.http().sendRequest(httpRequest, mode, connectionId)
+                } else {
+                    api.http().sendRequest(httpRequest, mode)
+                }
             }
             val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
 
-            serializeRequestResponse(result, elapsedMs, maxBodyLength)
+            addToSitemap(result, "[MCP] http_send_request via BurpMCP-Ultra")
+            ToolCallTracker.lastSentResult.set(result)
+
+            withScopeWarning(serializeRequestResponse(result, elapsedMs, maxBodyLength), scope.warning)
         } catch (e: Exception) {
             buildJsonObject {
                 put("error", "Failed to send request: ${e.message}")
+                put("is_timeout", (e.message ?: "").contains("timed out", ignoreCase = true))
             }
         }
     }
@@ -99,39 +142,97 @@ class HttpBridge(
     fun sendRequestsParallel(
         requests: List<JsonObject>,
         httpMode: String?,
-        maxBodyLength: Int? = null
+        maxBodyLength: Int? = null,
+        timeoutMs: Long? = null
     ): JsonObject {
         return try {
             val mode = resolveHttpMode(httpMode)
-            val httpRequests = requests.map { reqObj ->
-                val rawReq = reqObj["raw_request"]?.jsonPrimitive?.contentOrNull
-                val reqUrl = reqObj["url"]?.jsonPrimitive?.contentOrNull
-                val reqMethod = reqObj["method"]?.jsonPrimitive?.contentOrNull
-                val reqBody = reqObj["body"]?.jsonPrimitive?.contentOrNull
-                val reqHost = reqObj["host"]?.jsonPrimitive?.contentOrNull
-                val reqPort = reqObj["port"]?.jsonPrimitive?.intOrNull
-                val reqTls = reqObj["use_tls"]?.jsonPrimitive?.booleanOrNull
-                val reqHeaders = reqObj["headers"]?.jsonObject?.let { hObj ->
-                    hObj.entries.associate { (k, v) -> k to v.jsonPrimitive.content }
-                }
 
-                buildRequest(reqUrl, reqMethod, reqHeaders, reqBody, rawReq, reqHost, reqPort, reqTls)
+            // Build all requests, recording original index and any per-request build errors.
+            data class Built(val originalIndex: Int, val request: HttpRequest?, val error: String?)
+            val built = requests.mapIndexed { idx, reqObj ->
+                try {
+                    val rawReq = reqObj["raw_request"]?.jsonPrimitive?.contentOrNull
+                    val reqUrl = reqObj["url"]?.jsonPrimitive?.contentOrNull
+                    val reqMethod = reqObj["method"]?.jsonPrimitive?.contentOrNull
+                    val reqBody = reqObj["body"].asBodyString()
+                    val reqHost = reqObj["host"]?.jsonPrimitive?.contentOrNull
+                    val reqPort = reqObj["port"]?.jsonPrimitive?.intOrNull
+                    val reqTls = reqObj["use_tls"]?.jsonPrimitive?.booleanOrNull
+                    val reqHeaders = reqObj["headers"].asStringMap()
+                    val httpReq = buildRequest(reqUrl, reqMethod, reqHeaders, reqBody, rawReq, reqHost, reqPort, reqTls)
+                    Built(idx, httpReq, null)
+                } catch (e: Exception) {
+                    Built(idx, null, e.message ?: "Failed to build request")
+                }
             }
 
-            val startTime = System.nanoTime()
-            val results = api.http().sendRequests(httpRequests, mode)
-            val totalElapsedMs = (System.nanoTime() - startTime) / 1_000_000
+            // Group successfully-built requests by HttpService (host+port+tls). Burp's
+            // sendRequests() rejects mixed services with "HTTP service on each request must
+            // be the same"; this fix groups by service and dispatches each group separately.
+            val grouped = built.filter { it.request != null }.groupBy { b ->
+                val svc = b.request!!.httpService()
+                Triple(svc.host(), svc.port(), svc.secure())
+            }
+
+            // Storage for results in original-input order.
+            val resultsArray = arrayOfNulls<HttpRequestResponse>(requests.size)
+            val perGroupTimings = mutableMapOf<String, Long>()
+
+            val totalStart = System.nanoTime()
+            executeWithTimeout(timeoutMs) {
+                grouped.forEach { (svc, group) ->
+                    val groupKey = "${svc.first}:${svc.second}:${if (svc.third) "tls" else "plain"}"
+                    val groupRequests = group.map { it.request!! }
+                    val groupStart = System.nanoTime()
+                    val groupResults = try {
+                        api.http().sendRequests(groupRequests, mode)
+                    } catch (e: Exception) {
+                        // If a single group fails, leave its slots null; carry on with others.
+                        emptyList()
+                    }
+                    perGroupTimings[groupKey] = (System.nanoTime() - groupStart) / 1_000_000
+                    group.forEachIndexed { gIdx, b ->
+                        if (gIdx < groupResults.size) {
+                            resultsArray[b.originalIndex] = groupResults[gIdx]
+                        }
+                    }
+                }
+                Unit
+            }
+            val totalElapsedMs = (System.nanoTime() - totalStart) / 1_000_000
+
+            // Add successful results to sitemap.
+            resultsArray.filterNotNull().forEach { result ->
+                addToSitemap(result, "[MCP] Parallel request via BurpMCP-Ultra")
+            }
 
             buildJsonObject {
                 put("total_requests", requests.size)
-                put("total_responses", results.size)
+                put("total_responses", resultsArray.count { it != null })
                 put("total_elapsed_ms", totalElapsedMs)
+                put("groups_dispatched", grouped.size)
+                put("group_timings_ms", buildJsonObject {
+                    perGroupTimings.forEach { (k, v) -> put(k, v) }
+                })
                 put("results", buildJsonArray {
-                    results.forEachIndexed { index, result ->
-                        val serialized = serializeRequestResponse(result, null, maxBodyLength)
+                    built.forEach { b ->
+                        val result = resultsArray[b.originalIndex]
                         add(buildJsonObject {
-                            put("index", index)
-                            serialized.forEach { (k, v) -> put(k, v) }
+                            put("index", b.originalIndex)
+                            when {
+                                b.error != null -> {
+                                    put("error", b.error)
+                                    put("phase", "build")
+                                }
+                                result != null -> {
+                                    serializeRequestResponse(result, null, maxBodyLength).forEach { (k, v) -> put(k, v) }
+                                }
+                                else -> {
+                                    put("error", "Send failed (group dispatch error or no response)")
+                                    put("phase", "send")
+                                }
+                            }
                         })
                     }
                 })
@@ -139,6 +240,7 @@ class HttpBridge(
         } catch (e: Exception) {
             buildJsonObject {
                 put("error", "Failed to send parallel requests: ${e.message}")
+                put("is_timeout", (e.message ?: "").contains("timed out", ignoreCase = true))
             }
         }
     }
@@ -176,19 +278,19 @@ class HttpBridge(
                 val rawReq = substitutedStep["raw_request"]?.jsonPrimitive?.contentOrNull
                 val reqUrl = substitutedStep["url"]?.jsonPrimitive?.contentOrNull
                 val reqMethod = substitutedStep["method"]?.jsonPrimitive?.contentOrNull
-                val reqBody = substitutedStep["body"]?.jsonPrimitive?.contentOrNull
+                val reqBody = substitutedStep["body"].asBodyString()
                 val reqHost = substitutedStep["host"]?.jsonPrimitive?.contentOrNull
                 val reqPort = substitutedStep["port"]?.jsonPrimitive?.intOrNull
                 val reqTls = substitutedStep["use_tls"]?.jsonPrimitive?.booleanOrNull
-                val reqHeaders = substitutedStep["headers"]?.jsonObject?.let { hObj ->
-                    hObj.entries.associate { (k, v) -> k to v.jsonPrimitive.content }
-                }
+                val reqHeaders = substitutedStep["headers"].asStringMap()
 
                 val httpRequest = buildRequest(reqUrl, reqMethod, reqHeaders, reqBody, rawReq, reqHost, reqPort, reqTls)
 
                 val startTime = System.nanoTime()
                 val result = api.http().sendRequest(httpRequest, mode)
                 val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
+
+                addToSitemap(result, "[MCP] Chain step $index via BurpMCP-Ultra")
 
                 // Extract variables from the response
                 val extractions = substitutedStep["extract"]?.jsonArray ?: JsonArray(emptyList())
@@ -354,7 +456,13 @@ class HttpBridge(
         caseSensitive: Boolean
     ): JsonObject {
         return try {
-            val httpResponse = HttpResponse.httpResponse(response)
+            // Normalize line endings: convert literal \r\n to CRLF, literal \n to LF,
+            // then any bare LF to CRLF, so Montoya parses pasted responses correctly.
+            val normalizedResponse = response
+                .replace("\\r\\n", "\r\n")
+                .replace("\\n", "\n")
+                .replace(Regex("(?<!\r)\n"), "\r\n")
+            val httpResponse = HttpResponse.httpResponse(normalizedResponse)
             val analyzer = api.http().createResponseKeywordsAnalyzer(keywords)
             analyzer.updateWith(httpResponse)
 
@@ -393,7 +501,12 @@ class HttpBridge(
             val analyzer: ResponseVariationsAnalyzer = api.http().createResponseVariationsAnalyzer()
 
             responses.forEach { rawResp ->
-                val httpResponse = HttpResponse.httpResponse(rawResp)
+                // Normalize line endings so Montoya parses pasted responses correctly.
+                val normalizedResp = rawResp
+                    .replace("\\r\\n", "\r\n")
+                    .replace("\\n", "\n")
+                    .replace(Regex("(?<!\r)\n"), "\r\n")
+                val httpResponse = HttpResponse.httpResponse(normalizedResp)
                 analyzer.updateWith(httpResponse)
             }
 
@@ -494,19 +607,19 @@ class HttpBridge(
 
     private fun matchesTrafficRuleRequest(rule: TrafficRule, request: HttpRequestToBeSent): Boolean {
         if (rule.matchUrl != null) {
-            if (!Regex(rule.matchUrl, RegexOption.IGNORE_CASE).containsMatchIn(request.url())) {
+            if (!SafeRegex.containsMatchIn(rule.matchUrl, request.url(), ignoreCase = true)) {
                 return false
             }
         }
         if (rule.matchHost != null) {
             val hostPattern = rule.matchHost.replace("*", ".*")
-            if (!Regex(hostPattern, RegexOption.IGNORE_CASE).matches(request.httpService().host())) {
+            if (!SafeRegex.matches(hostPattern, request.httpService().host(), ignoreCase = true)) {
                 return false
             }
         }
         if (rule.matchHeader != null) {
             val headerStr = request.headers().joinToString("\r\n") { "${it.name()}: ${it.value()}" }
-            if (!Regex(rule.matchHeader, RegexOption.IGNORE_CASE).containsMatchIn(headerStr)) {
+            if (!SafeRegex.containsMatchIn(rule.matchHeader, headerStr, ignoreCase = true)) {
                 return false
             }
         }
@@ -516,7 +629,7 @@ class HttpBridge(
     private fun matchesTrafficRuleResponse(rule: TrafficRule, response: HttpResponseReceived): Boolean {
         if (rule.matchUrl != null) {
             val url = try { response.initiatingRequest()?.url() } catch (_: Exception) { null }
-            if (url != null && !Regex(rule.matchUrl, RegexOption.IGNORE_CASE).containsMatchIn(url)) {
+            if (url != null && !SafeRegex.containsMatchIn(rule.matchUrl, url, ignoreCase = true)) {
                 return false
             }
         }
@@ -524,14 +637,14 @@ class HttpBridge(
             val host = try { response.initiatingRequest()?.httpService()?.host() } catch (_: Exception) { null }
             if (host != null) {
                 val hostPattern = rule.matchHost.replace("*", ".*")
-                if (!Regex(hostPattern, RegexOption.IGNORE_CASE).matches(host)) {
+                if (!SafeRegex.matches(hostPattern, host, ignoreCase = true)) {
                     return false
                 }
             }
         }
         if (rule.matchHeader != null) {
             val headerStr = response.headers().joinToString("\r\n") { "${it.name()}: ${it.value()}" }
-            if (!Regex(rule.matchHeader, RegexOption.IGNORE_CASE).containsMatchIn(headerStr)) {
+            if (!SafeRegex.containsMatchIn(rule.matchHeader, headerStr, ignoreCase = true)) {
                 return false
             }
         }
@@ -546,10 +659,7 @@ class HttpBridge(
         var modified = request
 
         if (rule.modifyAddHeader != null) {
-            val colonIdx = rule.modifyAddHeader.indexOf(':')
-            if (colonIdx > 0) {
-                val name = rule.modifyAddHeader.substring(0, colonIdx).trim()
-                val value = rule.modifyAddHeader.substring(colonIdx + 1).trim()
+            HeaderSafety.parseHeaderLine(rule.modifyAddHeader)?.let { (name, value) ->
                 modified = modified.withAddedHeader(name, value)
             }
         }
@@ -567,10 +677,7 @@ class HttpBridge(
         var modified = response
 
         if (rule.modifyAddHeader != null) {
-            val colonIdx = rule.modifyAddHeader.indexOf(':')
-            if (colonIdx > 0) {
-                val name = rule.modifyAddHeader.substring(0, colonIdx).trim()
-                val value = rule.modifyAddHeader.substring(colonIdx + 1).trim()
+            HeaderSafety.parseHeaderLine(rule.modifyAddHeader)?.let { (name, value) ->
                 modified = modified.withAddedHeader(name, value)
             }
         }
@@ -590,6 +697,15 @@ class HttpBridge(
 
     /**
      * Builds an [HttpRequest] from either a raw string or structured parameters.
+     *
+     * Behaviour notes (fixes for known agent-reported issues):
+     * - When [rawRequest] lacks port info, defaults to TLS:443 (modern web default)
+     *   instead of plain:80. Honour explicit [port]/[useTls] overrides.
+     * - When [url] + [headers] are both supplied AND [preserveHeaders] is true (default),
+     *   constructs a complete raw HTTP request preserving the caller's headers byte-exact,
+     *   bypassing Burp's default User-Agent/Accept/etc. injection.
+     * - Auto-recomputes Content-Length on raw_request if it is wrong (silent CL bugs
+     *   are responsible for ghost status_code:0 responses).
      */
     private fun buildRequest(
         url: String?,
@@ -599,50 +715,220 @@ class HttpBridge(
         rawRequest: String?,
         host: String?,
         port: Int?,
-        useTls: Boolean?
+        useTls: Boolean?,
+        preserveHeaders: Boolean = true,
+        autoFixContentLength: Boolean = true
     ): HttpRequest {
         var request: HttpRequest = if (rawRequest != null) {
-            // Build from raw HTTP text
-            if (host != null) {
-                val service = HttpService.httpService(
-                    host,
-                    port ?: if (useTls == true) 443 else 80,
-                    useTls ?: false
-                )
-                HttpRequest.httpRequest(service, rawRequest)
-            } else {
-                HttpRequest.httpRequest(rawRequest)
-            }
+            buildFromRawRequest(rawRequest, host, port, useTls, autoFixContentLength)
         } else if (url != null) {
-            // Build from URL
-            var req = HttpRequest.httpRequestFromUrl(url)
-            if (method != null) {
-                req = req.withMethod(method)
+            if (preserveHeaders && !headers.isNullOrEmpty()) {
+                buildFromUrlPreservingHeaders(url, method, headers, body, host, port, useTls)
+            } else {
+                buildFromUrlMontoya(url, method, headers, body, host, port, useTls)
             }
-            if (body != null) {
-                req = req.withBody(body)
-            }
-            req
         } else {
             throw IllegalArgumentException("Either 'url' or 'raw_request' must be provided")
         }
 
-        // Apply headers
-        headers?.forEach { (name, value) ->
-            request = request.withHeader(name, value)
-        }
-
-        // Override service if host is explicitly provided and we built from URL
-        if (rawRequest == null && host != null) {
-            val service = HttpService.httpService(
-                host,
-                port ?: if (useTls == true) 443 else 80,
-                useTls ?: (url?.startsWith("https") == true)
-            )
-            request = request.withService(service)
+        // For raw_request: allow extra header overrides via headers map (replaces existing)
+        if (rawRequest != null) {
+            headers?.forEach { (name, value) ->
+                request = request.withHeader(name, value)
+            }
         }
 
         return request
+    }
+
+    /**
+     * Builds a request from raw HTTP text, defaulting to TLS:443 when port info is absent.
+     * Auto-fixes Content-Length on the raw request if [autoFixContentLength] is true.
+     */
+    private fun buildFromRawRequest(
+        rawRequest: String,
+        host: String?,
+        port: Int?,
+        useTls: Boolean?,
+        autoFixContentLength: Boolean
+    ): HttpRequest {
+        val cleaned = if (autoFixContentLength) fixContentLength(rawRequest) else rawRequest
+
+        val resolvedHost = host ?: Regex("(?i)^Host:\\s*([^:\\r\\n]+)", RegexOption.MULTILINE)
+            .find(cleaned)?.groupValues?.get(1)?.trim()
+
+        if (resolvedHost == null) {
+            return HttpRequest.httpRequest(cleaned)
+        }
+
+        val hostHeaderPort = if (host == null) {
+            Regex("(?i)^Host:\\s*[^:]+:(\\d+)", RegexOption.MULTILINE)
+                .find(cleaned)?.groupValues?.get(1)?.toIntOrNull()
+        } else null
+
+        // Modern web default: TLS:443 unless caller explicitly says otherwise
+        val effectivePort = port ?: hostHeaderPort ?: 443
+        val effectiveTls = useTls ?: (effectivePort != 80)
+
+        val service = HttpService.httpService(resolvedHost, effectivePort, effectiveTls)
+        return HttpRequest.httpRequest(service, cleaned)
+    }
+
+    /**
+     * Builds a request from URL + headers as a complete raw HTTP request, preserving the
+     * caller's headers exactly. Bypasses Burp's default header injection (User-Agent,
+     * Accept, Accept-Language, etc.) which silently overrides caller-supplied values.
+     */
+    private fun buildFromUrlPreservingHeaders(
+        url: String,
+        method: String?,
+        headers: Map<String, String>,
+        body: String?,
+        hostOverride: String?,
+        portOverride: Int?,
+        tlsOverride: Boolean?
+    ): HttpRequest {
+        val (svcHost, svcPort, svcTls) = resolveService(url, hostOverride, portOverride, tlsOverride)
+        val rawHttp = constructRawHttpRequest(url, method ?: "GET", headers, body, svcHost, svcPort, svcTls)
+        val service = HttpService.httpService(svcHost, svcPort, svcTls)
+        return HttpRequest.httpRequest(service, rawHttp)
+    }
+
+    /**
+     * Legacy/Burp-managed path: uses Montoya's [HttpRequest.httpRequestFromUrl] which adds
+     * Burp's default headers, then layers user headers on top via withHeader (replaces if
+     * present). Use this when [preserveHeaders] is false.
+     */
+    private fun buildFromUrlMontoya(
+        url: String,
+        method: String?,
+        headers: Map<String, String>?,
+        body: String?,
+        hostOverride: String?,
+        portOverride: Int?,
+        tlsOverride: Boolean?
+    ): HttpRequest {
+        var req = HttpRequest.httpRequestFromUrl(url)
+        if (method != null) req = req.withMethod(method)
+        if (body != null) req = req.withBody(body)
+        headers?.forEach { (n, v) -> req = req.withHeader(n, v) }
+        if (hostOverride != null) {
+            val tls = tlsOverride ?: url.startsWith("https", ignoreCase = true)
+            val effectivePort = portOverride ?: if (tls) 443 else 80
+            req = req.withService(HttpService.httpService(hostOverride, effectivePort, tls))
+        }
+        return req
+    }
+
+    /**
+     * Resolves (host, port, tls) from a URL + optional overrides.
+     */
+    private fun resolveService(
+        url: String,
+        hostOverride: String?,
+        portOverride: Int?,
+        tlsOverride: Boolean?
+    ): Triple<String, Int, Boolean> {
+        val uri = try { URI(url) } catch (_: Exception) { null }
+        val tls = tlsOverride ?: (uri?.scheme?.equals("https", ignoreCase = true) ?: url.startsWith("https"))
+        val host = hostOverride ?: uri?.host ?: throw IllegalArgumentException("Cannot extract host from URL: $url")
+        val port = portOverride ?: when {
+            uri != null && uri.port > 0 -> uri.port
+            tls -> 443
+            else -> 80
+        }
+        return Triple(host, port, tls)
+    }
+
+    /**
+     * Constructs a complete raw HTTP/1.1 request from structured parameters.
+     * Exactly preserves caller headers; auto-adds Host and Content-Length only if missing.
+     */
+    private fun constructRawHttpRequest(
+        url: String,
+        method: String,
+        headers: Map<String, String>,
+        body: String?,
+        host: String,
+        port: Int,
+        tls: Boolean
+    ): String {
+        val uri = try { URI(url) } catch (_: Exception) { null }
+        val pathPart = uri?.rawPath?.ifEmpty { "/" } ?: "/"
+        val queryPart = uri?.rawQuery?.let { "?$it" } ?: ""
+        val requestTarget = "$pathPart$queryPart"
+
+        val isDefaultPort = (tls && port == 443) || (!tls && port == 80)
+        val hostHeader = if (isDefaultPort) host else "$host:$port"
+
+        val sb = StringBuilder()
+        sb.append("$method $requestTarget HTTP/1.1\r\n")
+
+        val hasHost = headers.keys.any { it.equals("Host", ignoreCase = true) }
+        if (!hasHost) sb.append("Host: $hostHeader\r\n")
+
+        headers.forEach { (k, v) -> sb.append("$k: $v\r\n") }
+
+        val hasContentLength = headers.keys.any { it.equals("Content-Length", ignoreCase = true) }
+        val hasTransferEncoding = headers.keys.any { it.equals("Transfer-Encoding", ignoreCase = true) }
+        if (body != null && !hasContentLength && !hasTransferEncoding) {
+            val bodyBytes = body.toByteArray(Charsets.ISO_8859_1)
+            sb.append("Content-Length: ${bodyBytes.size}\r\n")
+        }
+
+        sb.append("\r\n")
+        if (body != null) sb.append(body)
+
+        return sb.toString()
+    }
+
+    /**
+     * Recomputes the Content-Length header on a raw HTTP request to match the actual
+     * body size in bytes (ISO-8859-1). Returns the original request unchanged if there
+     * is no body section or no Content-Length header.
+     *
+     * Fixes the silent status_code:0 ghost response when caller-computed CL is wrong.
+     */
+    private fun fixContentLength(rawRequest: String): String {
+        val boundary = rawRequest.indexOf("\r\n\r\n")
+        if (boundary < 0) return rawRequest
+
+        val headerSection = rawRequest.substring(0, boundary)
+        val bodySection = rawRequest.substring(boundary + 4)
+
+        val clRegex = Regex("(?im)^Content-Length:\\s*(\\d+)\\s*$")
+        val clMatch = clRegex.find(headerSection) ?: return rawRequest
+
+        val declaredLength = clMatch.groupValues[1].toIntOrNull() ?: return rawRequest
+        val actualLength = bodySection.toByteArray(Charsets.ISO_8859_1).size
+        if (declaredLength == actualLength) return rawRequest
+
+        val fixedHeader = clRegex.replaceFirst(headerSection, "Content-Length: $actualLength")
+        return "$fixedHeader\r\n\r\n$bodySection"
+    }
+
+    // ---------------------------------------------------------------
+    // Timeout-bounded execution
+    // ---------------------------------------------------------------
+
+    private val httpExecutor = Executors.newCachedThreadPool { r ->
+        Thread(r, "burpmcp-http-${System.nanoTime()}").apply { isDaemon = true }
+    }
+
+    /**
+     * Runs [action] on a daemon thread with a hard timeout. On timeout, cancels the
+     * future (Burp request continues in background but caller is unblocked) and throws.
+     * If [timeoutMs] is null or non-positive, runs synchronously without overhead.
+     */
+    private fun <T> executeWithTimeout(timeoutMs: Long?, action: () -> T): T {
+        if (timeoutMs == null || timeoutMs <= 0) return action()
+        val future = httpExecutor.submit(Callable { action() })
+        return try {
+            future.get(timeoutMs, TimeUnit.MILLISECONDS)
+        } catch (e: TimeoutException) {
+            future.cancel(true)
+            throw RuntimeException("Request timed out after ${timeoutMs}ms")
+        }
     }
 
     // ---------------------------------------------------------------
@@ -669,7 +955,8 @@ class HttpBridge(
         port: Int,
         useTls: Boolean,
         httpMode: String?,
-        maxBodyLength: Int? = null
+        maxBodyLength: Int? = null,
+        timeoutMs: Long? = null
     ): JsonObject {
         return try {
             val bytes = if (rawHex != null) {
@@ -684,17 +971,70 @@ class HttpBridge(
             val httpRequest = HttpRequest.httpRequest(service, BurpByteArray.byteArray(*bytes))
             val mode = resolveHttpMode(httpMode)
 
+            val targetUrl = try { httpRequest.url() } catch (_: Exception) { (if (useTls) "https" else "http") + "://$host:$port/" }
+            val scope = checkScope(targetUrl)
+            scope.deny?.let { return it }
+
             val startTime = System.nanoTime()
-            val result = api.http().sendRequest(httpRequest, mode)
+            val result = executeWithTimeout(timeoutMs) { api.http().sendRequest(httpRequest, mode) }
             val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
 
-            serializeRequestResponse(result, elapsedMs, maxBodyLength)
+            addToSitemap(result, "[MCP] Raw bytes request via BurpMCP-Ultra")
+            ToolCallTracker.lastSentResult.set(result)
+
+            withScopeWarning(serializeRequestResponse(result, elapsedMs, maxBodyLength), scope.warning)
         } catch (e: Exception) {
             buildJsonObject {
                 put("error", "Failed to send raw bytes: ${e.message}")
+                put("is_timeout", (e.message ?: "").contains("timed out", ignoreCase = true))
             }
         }
     }
+
+    // ---------------------------------------------------------------
+    // Scope policy gate (operator-controlled; the agent cannot change it)
+    // ---------------------------------------------------------------
+
+    /** Reads the operator-set enforcement mode from Burp preferences (key `mcp_scope_mode`). */
+    private fun scopeMode(): ScopeMode =
+        ScopeMode.fromString(
+            try { api.persistence().preferences().getString("mcp_scope_mode") } catch (_: Exception) { null }
+        )
+
+    /** Result of a scope check: [deny] (return it to block the send) and/or a [warning] to attach. */
+    private data class ScopeCheck(val deny: JsonObject?, val warning: String?)
+
+    /**
+     * Evaluates an outbound [url] against Burp's target scope under the operator
+     * policy. Fails open (allows) when scope cannot be evaluated, so a Burp
+     * quirk never blocks legitimate work.
+     */
+    private fun checkScope(url: String): ScopeCheck {
+        val mode = scopeMode()
+        if (mode == ScopeMode.OFF) return ScopeCheck(null, null)
+        val inScope = try { api.scope().isInScope(url) } catch (_: Exception) { return ScopeCheck(null, null) }
+        return when (ScopePolicy.decide(mode, inScope)) {
+            ScopeDecision.DENY -> ScopeCheck(
+                buildJsonObject {
+                    put(
+                        "error",
+                        "Blocked by scope policy: target is not in Burp's scope. An operator can allow it by " +
+                            "adding it to Burp's target scope or setting preference mcp_scope_mode to 'warn' or 'off'."
+                    )
+                    put("out_of_scope", true)
+                    put("url", url)
+                    put("scope_mode", "enforce")
+                },
+                null
+            )
+            ScopeDecision.WARN -> ScopeCheck(null, "out_of_scope: target is not in Burp's target scope")
+            ScopeDecision.ALLOW -> ScopeCheck(null, null)
+        }
+    }
+
+    /** Returns [base] with a `scope_warning` field appended when [warning] is non-null. */
+    private fun withScopeWarning(base: JsonObject, warning: String?): JsonObject =
+        if (warning == null) base else JsonObject(base + ("scope_warning" to JsonPrimitive(warning)))
 
     // ---------------------------------------------------------------
     // Fuzzer (intruder-like payload injection)
@@ -761,6 +1101,7 @@ class HttpBridge(
                         val startTime = System.nanoTime()
                         val result = api.http().sendRequest(httpRequest, mode)
                         val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
+                        addToSitemap(result, "[MCP] Fuzz payload=$payload via BurpMCP-Ultra")
 
                         results.add(buildJsonObject {
                             put("payload", payload)
@@ -792,6 +1133,7 @@ class HttpBridge(
                             val startTime = System.nanoTime()
                             val result = api.http().sendRequest(httpRequest, mode)
                             val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
+                            addToSitemap(result, "[MCP] Fuzz marker pos=$posIdx payload=$payload")
 
                             results.add(buildJsonObject {
                                 put("payload", payload)
@@ -812,6 +1154,7 @@ class HttpBridge(
                             val startTime = System.nanoTime()
                             val result = api.http().sendRequest(httpRequest, mode)
                             val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
+                            addToSitemap(result, "[MCP] Fuzz offset pos=$posIdx payload=$payload")
 
                             results.add(buildJsonObject {
                                 put("payload", payload)
@@ -851,21 +1194,30 @@ class HttpBridge(
     // ---------------------------------------------------------------
 
     /**
-     * Race condition tester: sends N requests simultaneously using last-byte sync.
+     * Race condition tester: dispatches N requests concurrently via Burp's parallel
+     * request engine ([burp.api.montoya.http.Http.sendRequests]) and analyzes the
+     * responses for variations (status codes, body lengths) that indicate the server
+     * handles concurrent requests inconsistently.
      *
-     * Technique: For each request, send all bytes except the last one. Then send
-     * all final bytes at once across all connections. This synchronizes the
-     * requests to arrive at the server within microseconds of each other.
+     * NOTE: This is best-effort concurrency, NOT guaranteed single-packet / last-byte
+     * synchronization. Requests are built up front and handed to Burp's parallel sender
+     * in one batch; Burp dispatches them as concurrently as the engine and transport
+     * allow. There is no microsecond-level last-byte gate — use this to surface likely
+     * race conditions, not to guarantee a precise arrival window.
      *
      * @param request Base HTTP request string (use FUZZ for varied payloads)
      * @param host Target host
      * @param port Target port
      * @param useTls Use TLS
-     * @param count Number of concurrent requests (default 10)
-     * @param payloads Optional: if provided, each request gets a different payload replacing FUZZ
+     * @param count Number of concurrent requests (default 10). IGNORED when [payloads]
+     *   is non-empty — in that case one request is built per payload and [payloads]
+     *   takes precedence.
+     * @param payloads Optional: if provided, each request gets a different payload
+     *   replacing the FUZZ keyword, and the request count equals payloads.size.
      * @param httpMode HTTP mode
      * @param maxBodyLength Response truncation
-     * @param gateDelay Milliseconds to wait after queuing all requests before releasing the gate (default 100)
+     * @param gateDelay Milliseconds to sleep immediately before dispatching the batch
+     *   (a simple pre-dispatch gate). 0 or negative dispatches immediately (default 100).
      */
     fun raceCondition(
         request: String,
@@ -897,7 +1249,13 @@ class HttpBridge(
                 (1..count).map { HttpRequest.httpRequest(service, baseRequest) }
             }
 
-            // Send all requests in parallel using Burp's parallel sender
+            // Optional pre-dispatch gate: sleep gateDelay ms before releasing the batch.
+            if (gateDelay > 0) {
+                try { Thread.sleep(gateDelay) } catch (_: InterruptedException) { Thread.currentThread().interrupt() }
+            }
+
+            // Send all requests in parallel using Burp's parallel sender (best-effort
+            // concurrency — see kdoc; this is NOT guaranteed single-packet sync).
             val startTime = System.nanoTime()
             val responses = api.http().sendRequests(requests, mode)
             val totalElapsedMs = (System.nanoTime() - startTime) / 1_000_000
@@ -908,6 +1266,7 @@ class HttpBridge(
             val resultsList = mutableListOf<JsonObject>()
 
             responses.forEachIndexed { index, result ->
+                addToSitemap(result, "[MCP] Race request #$index via BurpMCP-Ultra")
                 val statusCode = try { result.response()?.statusCode()?.toInt() ?: 0 } catch (_: Throwable) { 0 }
                 val bodyLen = try { result.response()?.body()?.length() ?: 0 } catch (_: Throwable) { 0 }
 

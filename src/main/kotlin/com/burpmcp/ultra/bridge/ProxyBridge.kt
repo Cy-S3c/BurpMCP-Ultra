@@ -20,6 +20,8 @@ import burp.api.montoya.proxy.http.ProxyResponseReceivedAction
 import burp.api.montoya.proxy.http.ProxyResponseToBeSentAction
 import burp.api.montoya.websocket.Direction
 import com.burpmcp.ultra.events.EventBus
+import com.burpmcp.ultra.safety.HeaderSafety
+import com.burpmcp.ultra.safety.SafeRegex
 import com.burpmcp.ultra.state.ProxyRule
 import com.burpmcp.ultra.state.StateManager
 import kotlinx.serialization.json.*
@@ -72,6 +74,21 @@ class ProxyBridge(
         statusCodeRange: String? = null,
         maxResponseLength: Int? = null
     ): JsonObject {
+        // Resolve the optional MIME type filter up front so an unrecognized value
+        // produces a clear error instead of silently dropping the filter (which
+        // would return ALL history as if it matched).
+        val resolvedMimeType: MimeType? = if (mimeType != null) {
+            resolveMimeType(mimeType)
+                ?: return buildJsonObject {
+                    put(
+                        "error",
+                        "Unknown mime_type: $mimeType. Valid values: ${mimeTypeValidValues()}"
+                    )
+                }
+        } else {
+            null
+        }
+
         val filter = ProxyHistoryFilter { item ->
             if (inScopeOnly && !item.request().isInScope()) return@ProxyHistoryFilter false
             if (host != null && !item.host().contains(host, ignoreCase = true)) return@ProxyHistoryFilter false
@@ -88,9 +105,8 @@ class ProxyBridge(
                     if (sc < min || sc > max) return@ProxyHistoryFilter false
                 }
             }
-            if (mimeType != null) {
-                val resolved = try { MimeType.valueOf(mimeType.uppercase()) } catch (_: Exception) { null }
-                if (resolved != null && item.mimeType() != resolved) return@ProxyHistoryFilter false
+            if (resolvedMimeType != null && item.mimeType() != resolvedMimeType) {
+                return@ProxyHistoryFilter false
             }
             true
         }
@@ -146,7 +162,10 @@ class ProxyBridge(
 
             var found = false
             if (searchRequest) {
-                found = item.contains(compiledPattern)
+                // Match against the request only. item.contains(pattern) inherits
+                // HttpRequestResponse.contains, which matches BOTH request and
+                // response, so a request-only search must inspect the request text.
+                found = compiledPattern.matcher(item.request().toString()).find()
             }
             if (!found && searchResponse && item.hasResponse()) {
                 found = compiledPattern.matcher(item.response().toString()).find()
@@ -500,12 +519,12 @@ class ProxyBridge(
     private fun matchesRequestRule(rule: ProxyRule, request: InterceptedRequest): Boolean {
         if (rule.matchHost != null) {
             val hostPattern = rule.matchHost.replace("*", ".*")
-            if (!Regex(hostPattern, RegexOption.IGNORE_CASE).matches(request.httpService().host())) {
+            if (!SafeRegex.matches(hostPattern, request.httpService().host(), ignoreCase = true)) {
                 return false
             }
         }
         if (rule.matchUrl != null) {
-            if (!Regex(rule.matchUrl, RegexOption.IGNORE_CASE).containsMatchIn(request.url())) {
+            if (!SafeRegex.containsMatchIn(rule.matchUrl, request.url(), ignoreCase = true)) {
                 return false
             }
         }
@@ -516,13 +535,13 @@ class ProxyBridge(
         }
         if (rule.matchHeader != null) {
             val headerStr = request.headers().joinToString("\r\n") { "${it.name()}: ${it.value()}" }
-            if (!Regex(rule.matchHeader, RegexOption.IGNORE_CASE).containsMatchIn(headerStr)) {
+            if (!SafeRegex.containsMatchIn(rule.matchHeader, headerStr, ignoreCase = true)) {
                 return false
             }
         }
         if (rule.matchBody != null) {
             val body = request.bodyToString()
-            if (!Regex(rule.matchBody, RegexOption.IGNORE_CASE).containsMatchIn(body)) {
+            if (!SafeRegex.containsMatchIn(rule.matchBody, body, ignoreCase = true)) {
                 return false
             }
         }
@@ -538,14 +557,14 @@ class ProxyBridge(
             val host = try { response.request()?.httpService()?.host() } catch (_: Exception) { null }
             if (host != null) {
                 val hostPattern = rule.matchHost.replace("*", ".*")
-                if (!Regex(hostPattern, RegexOption.IGNORE_CASE).matches(host)) {
+                if (!SafeRegex.matches(hostPattern, host, ignoreCase = true)) {
                     return false
                 }
             }
         }
         if (rule.matchUrl != null) {
             val url = try { response.request()?.url() } catch (_: Exception) { null }
-            if (url != null && !Regex(rule.matchUrl, RegexOption.IGNORE_CASE).containsMatchIn(url)) {
+            if (url != null && !SafeRegex.containsMatchIn(rule.matchUrl, url, ignoreCase = true)) {
                 return false
             }
         }
@@ -556,13 +575,13 @@ class ProxyBridge(
         }
         if (rule.matchHeader != null) {
             val headerStr = response.headers().joinToString("\r\n") { "${it.name()}: ${it.value()}" }
-            if (!Regex(rule.matchHeader, RegexOption.IGNORE_CASE).containsMatchIn(headerStr)) {
+            if (!SafeRegex.containsMatchIn(rule.matchHeader, headerStr, ignoreCase = true)) {
                 return false
             }
         }
         if (rule.matchBody != null) {
             val body = response.bodyToString()
-            if (!Regex(rule.matchBody, RegexOption.IGNORE_CASE).containsMatchIn(body)) {
+            if (!SafeRegex.containsMatchIn(rule.matchBody, body, ignoreCase = true)) {
                 return false
             }
         }
@@ -582,10 +601,7 @@ class ProxyBridge(
 
         // Add header
         if (rule.modifyAddHeader != null) {
-            val colonIdx = rule.modifyAddHeader.indexOf(':')
-            if (colonIdx > 0) {
-                val name = rule.modifyAddHeader.substring(0, colonIdx).trim()
-                val value = rule.modifyAddHeader.substring(colonIdx + 1).trim()
+            HeaderSafety.parseHeaderLine(rule.modifyAddHeader)?.let { (name, value) ->
                 modified = modified.withAddedHeader(name, value)
             }
         }
@@ -603,10 +619,7 @@ class ProxyBridge(
         // Body regex replacement
         if (rule.modifyBodyRegex != null && rule.modifyBodyReplacement != null) {
             val body = modified.bodyToString()
-            val newBody = body.replace(
-                Regex(rule.modifyBodyRegex, RegexOption.IGNORE_CASE),
-                rule.modifyBodyReplacement
-            )
+            val newBody = SafeRegex.replace(rule.modifyBodyRegex, body, rule.modifyBodyReplacement, ignoreCase = true)
             modified = modified.withBody(newBody)
         }
 
@@ -622,10 +635,7 @@ class ProxyBridge(
 
         // Add header
         if (rule.modifyAddHeader != null) {
-            val colonIdx = rule.modifyAddHeader.indexOf(':')
-            if (colonIdx > 0) {
-                val name = rule.modifyAddHeader.substring(0, colonIdx).trim()
-                val value = rule.modifyAddHeader.substring(colonIdx + 1).trim()
+            HeaderSafety.parseHeaderLine(rule.modifyAddHeader)?.let { (name, value) ->
                 modified = modified.withAddedHeader(name, value)
             }
         }
@@ -643,10 +653,7 @@ class ProxyBridge(
         // Body regex replacement
         if (rule.modifyBodyRegex != null && rule.modifyBodyReplacement != null) {
             val body = modified.bodyToString()
-            val newBody = body.replace(
-                Regex(rule.modifyBodyRegex, RegexOption.IGNORE_CASE),
-                rule.modifyBodyReplacement
-            )
+            val newBody = SafeRegex.replace(rule.modifyBodyRegex, body, rule.modifyBodyReplacement, ignoreCase = true)
             modified = modified.withBody(newBody)
         }
 
@@ -830,6 +837,46 @@ class ProxyBridge(
                 }
             } catch (_: Exception) { }
         }
+    }
+
+    /**
+     * Resolves a caller-supplied MIME type string to a [MimeType] enum constant.
+     *
+     * Accepts both the Montoya enum constant names (e.g. "JSON", "HTML") and a
+     * set of common content-type / alias spellings (e.g. "application/json",
+     * "text/html", "javascript"). Returns null if it cannot be resolved.
+     */
+    private fun resolveMimeType(input: String): MimeType? {
+        val normalized = input.trim()
+
+        // Direct enum constant match (case-insensitive), e.g. "JSON", "PLAIN_TEXT".
+        try {
+            return MimeType.valueOf(normalized.uppercase())
+        } catch (_: Exception) {
+            // fall through to alias resolution
+        }
+
+        // Common content-type strings and short aliases mapped to enum constants.
+        return when (normalized.lowercase()) {
+            "application/json", "json", "text/json" -> MimeType.JSON
+            "text/html", "html", "application/xhtml+xml", "xhtml" -> MimeType.HTML
+            "text/plain", "plain", "text" -> MimeType.PLAIN_TEXT
+            "text/css", "css" -> MimeType.CSS
+            "application/javascript", "text/javascript", "javascript", "js", "script" -> MimeType.SCRIPT
+            "application/xml", "text/xml", "xml" -> MimeType.XML
+            "application/yaml", "text/yaml", "yaml", "yml" -> MimeType.YAML
+            "text/event-stream", "sse" -> MimeType.SSE
+            "application/rtf", "text/rtf", "rtf" -> MimeType.RTF
+            else -> null
+        }
+    }
+
+    /**
+     * A human-readable hint listing the accepted MIME type values, for error messages.
+     */
+    private fun mimeTypeValidValues(): String {
+        val constants = MimeType.values().joinToString(", ") { it.name }
+        return "$constants (also accepts common aliases such as application/json, text/html, text/plain, application/javascript, application/xml)"
     }
 
     /**
