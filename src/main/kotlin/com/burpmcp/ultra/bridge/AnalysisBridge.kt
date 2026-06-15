@@ -578,18 +578,9 @@ class AnalysisBridge(private val api: MontoyaApi) {
             val allSameStatus = statusCodes.size == 1
             val allSameBody = results.map { it.body }.distinct().size == 1
 
-            val findings = mutableListOf<String>()
-            if (allSameStatus && allSameBody) {
-                findings.add("CRITICAL: All auth levels return identical responses — likely broken access control or missing authorization checks")
-            }
-            if (allSameStatus && !allSameBody) {
-                findings.add("WARNING: Same status code but different body — check for data leakage differences between auth levels")
-            }
-            val unauthResult = results.find { it.levelName.equals("none", true) || it.levelName.equals("unauth", true) }
-            val authResult = results.find { it.levelName != "none" && it.levelName != "unauth" }
-            if (unauthResult != null && authResult != null && unauthResult.statusCode == authResult.statusCode && unauthResult.statusCode == 200) {
-                findings.add("CRITICAL: Unauthenticated request returns 200 — endpoint may not require authentication")
-            }
+            val verdict = AuthDiffVerdict.assess(
+                results.map { AuthDiffVerdict.LevelResult(it.levelName, it.statusCode, it.body) }
+            ) { x, y -> calculateSimilarity(x, y).toDouble() }
 
             buildJsonObject {
                 put("auth_levels_tested", results.size)
@@ -605,7 +596,15 @@ class AnalysisBridge(private val api: MontoyaApi) {
                     }
                 })
                 put("differences", buildJsonArray { differences.forEach { add(it) } })
-                put("findings", buildJsonArray { findings.forEach { add(it) } })
+                put("findings", buildJsonArray {
+                    verdict.forEach {
+                        add(buildJsonObject {
+                            put("severity", it.severity)
+                            put("id", it.id)
+                            put("detail", it.detail)
+                        })
+                    }
+                })
                 put("all_same_status", allSameStatus)
                 put("all_same_body", allSameBody)
                 if (errors.isNotEmpty()) {
