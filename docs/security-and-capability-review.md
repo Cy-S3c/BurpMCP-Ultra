@@ -107,8 +107,12 @@ S1-S8 (§1 security), C1-C9 (§2 correctness), M1-M5 (§2 misplaced), N1-N12 (§
 > - ② ✅ **M1** AnalysisBridge first-class (reflection removed), **C8** urlEncode encodeAll — `1633ad8`
 > - ③ ✅ **N1** `jwt_attack` tool (alg:none, RS→HS confusion, secret crack, analysis) — `1e43d1a`
 > - ④ ✅ **D1** API-import `$ref`/allOf/enum resolution (imported bodies are real now) — `2df0819`
-> - ① ✅ **S2** destructive-tool gate (`mcp_allow_destructive`), **S3a** token no longer written to the log — `af61607`
-> - ⏳ Remaining: ① S3b (dashboard cookie auth), C4, C5, S5 · ② C6, C7, C9, M2, M4, S7 · ③ N2-N12 · ④ D2, D4, D5, D6, D7, D8 · then P2, P3.
+> - ① ✅ **S2** destructive-tool gate (`mcp_allow_destructive`), **S3a** token not logged — `af61607`
+> - ① ✅ **S3b** dashboard cookie auth (token out of URLs) `46ab659` · **C4/C5** history + WS-buffer caps `cfde07f` · **S5** durable audit log `bc395f3` → **① SECURITY TIER COMPLETE**
+> - ④ ✅ **D4** passive-intel entropy de-noising `6381de4` · **D2** auth-diff broken-access-control verdict `70c5cb8`
+> - ③ ✅ **N9** findings store `1232226` · **N2/N3/N4** recon trio — JS endpoints, content discovery, param mining `42f5f48`
+> - ⏳ Remaining: ② C6, C7, C9, M2, M4, S7 · ③ N5 GraphQL, N6 access-sweep, N7 injection-oracle, N8 smuggle, N10 single-packet, N11 CORS/cache, N12 fingerprint · ④ D5, D6, D7, D8 · then P2, P3.
+> (Session: 76 unit tests, build green, 145 tools.)
 
 **P0 — safety & correctness (do first; small, high-impact, verified):**
 1. Scope gate on all outbound HTTP (operator-controlled). — **S1**
