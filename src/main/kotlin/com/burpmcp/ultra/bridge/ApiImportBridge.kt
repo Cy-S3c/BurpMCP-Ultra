@@ -5,6 +5,7 @@ import burp.api.montoya.http.HttpService
 import burp.api.montoya.http.message.requests.HttpRequest
 import burp.api.montoya.http.message.responses.HttpResponse
 import burp.api.montoya.http.message.HttpRequestResponse
+import com.burpmcp.ultra.openapi.OpenApiSchema
 import com.burpmcp.ultra.state.StateManager
 import kotlinx.serialization.json.*
 
@@ -73,6 +74,7 @@ class ApiImportBridge(
             }
 
             // Extract paths and operations
+            val refs = OpenApiSchema.buildRefs(spec)
             val paths = spec["paths"]?.jsonObject ?: JsonObject(emptyMap())
             val endpoints = mutableListOf<JsonObject>()
             var requestsSent = 0
@@ -134,11 +136,11 @@ class ApiImportBridge(
 
                             if (jsonContent != null) {
                                 val schema = jsonContent["schema"]?.jsonObject
-                                body = generateJsonBody(schema)
+                                body = generateJsonBody(schema, refs)
                                 contentType = "application/json"
                             } else if (formContent != null) {
                                 val schema = formContent["schema"]?.jsonObject
-                                body = generateFormBody(schema)
+                                body = generateFormBody(schema, refs)
                                 contentType = "application/x-www-form-urlencoded"
                             }
                         }
@@ -148,7 +150,7 @@ class ApiImportBridge(
                         }
                         if (body == null && bodyParam != null) {
                             val schema = bodyParam.jsonObject["schema"]?.jsonObject
-                            body = generateJsonBody(schema)
+                            body = generateJsonBody(schema, refs)
                         }
                     }
 
@@ -263,42 +265,20 @@ class ApiImportBridge(
         }
     }
 
-    private fun generateJsonBody(schema: JsonObject?): String {
+    private fun generateJsonBody(schema: JsonObject?, refs: Map<String, JsonObject>): String {
         if (schema == null) return "{}"
         return try {
-            val obj = generateJsonFromSchema(schema)
-            obj.toString()
+            OpenApiSchema.example(schema, refs).toString()
         } catch (_: Exception) { "{}" }
     }
 
-    private fun generateJsonFromSchema(schema: JsonObject): JsonElement {
-        val type = schema["type"]?.jsonPrimitive?.contentOrNull
-        return when (type) {
-            "object" -> {
-                val properties = schema["properties"]?.jsonObject ?: return JsonPrimitive("{}")
-                buildJsonObject {
-                    properties.forEach { (propName, propSchema) ->
-                        put(propName, generateJsonFromSchema(propSchema.jsonObject))
-                    }
-                }
-            }
-            "array" -> {
-                val items = schema["items"]?.jsonObject
-                buildJsonArray {
-                    if (items != null) add(generateJsonFromSchema(items))
-                    else add(JsonPrimitive("test"))
-                }
-            }
-            "string" -> JsonPrimitive(schema["example"]?.jsonPrimitive?.contentOrNull ?: "test")
-            "integer", "number" -> JsonPrimitive(schema["example"]?.jsonPrimitive?.intOrNull ?: 1)
-            "boolean" -> JsonPrimitive(schema["example"]?.jsonPrimitive?.booleanOrNull ?: true)
-            else -> JsonPrimitive("test")
-        }
-    }
-
-    private fun generateFormBody(schema: JsonObject?): String {
+    private fun generateFormBody(schema: JsonObject?, refs: Map<String, JsonObject>): String {
         if (schema == null) return ""
-        val properties = schema["properties"]?.jsonObject ?: return ""
-        return properties.entries.joinToString("&") { (name, _) -> "$name=test" }
+        val resolved = OpenApiSchema.deref(schema, refs)
+        val properties = resolved["properties"]?.jsonObject ?: return ""
+        return properties.entries.joinToString("&") { (name, propSchema) ->
+            val value = (try { OpenApiSchema.example(propSchema.jsonObject, refs) } catch (_: Exception) { null }) as? JsonPrimitive
+            "$name=${value?.contentOrNull ?: "test"}"
+        }
     }
 }
