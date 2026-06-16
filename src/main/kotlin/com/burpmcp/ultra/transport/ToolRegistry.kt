@@ -36,6 +36,7 @@ import com.burpmcp.ultra.tools.jwt.JwtTools
 import com.burpmcp.ultra.tools.findings.FindingsTools
 import com.burpmcp.ultra.tools.recon.ReconTools
 import com.burpmcp.ultra.tools.graphql.GraphQlTools
+import com.burpmcp.ultra.tools.webprobe.WebProbeTools
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 
 /**
@@ -159,5 +160,8 @@ object ToolRegistry {
 
         // GraphQL: introspection + field-suggestion enumeration (scope-gated)
         GraphQlTools.register(server, bridges.graphql)
+
+        // Web misconfig recon: CORS probing + tech/WAF fingerprinting (scope-gated)
+        WebProbeTools.register(server, bridges.webProbe)
     }
 }
