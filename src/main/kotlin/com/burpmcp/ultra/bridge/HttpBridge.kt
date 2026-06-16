@@ -1473,7 +1473,9 @@ class HttpBridge(
                     })
                     put("request_body", req.bodyToString())
                 }
-            } catch (_: Exception) { }
+            } catch (e: Exception) {
+                put("request_serialize_error", e.message ?: "failed to serialize request")
+            }
 
             // Response info
             if (result.hasResponse()) {
@@ -1514,7 +1516,9 @@ class HttpBridge(
                             }
                         })
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) {
+                    put("response_serialize_error", e.message ?: "failed to serialize response")
+                }
             }
 
             // Timing
