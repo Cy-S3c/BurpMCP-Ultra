@@ -111,8 +111,10 @@ S1-S8 (§1 security), C1-C9 (§2 correctness), M1-M5 (§2 misplaced), N1-N12 (§
 > - ① ✅ **S3b** dashboard cookie auth (token out of URLs) `46ab659` · **C4/C5** history + WS-buffer caps `cfde07f` · **S5** durable audit log `bc395f3` → **① SECURITY TIER COMPLETE**
 > - ④ ✅ **D4** passive-intel entropy de-noising `6381de4` · **D2** auth-diff broken-access-control verdict `70c5cb8`
 > - ③ ✅ **N9** findings store `1232226` · **N2/N3/N4** recon trio — JS endpoints, content discovery, param mining `42f5f48`
-> - ⏳ Remaining: ② C6, C7, C9, M2, M4, S7 · ③ N5 GraphQL, N6 access-sweep, N7 injection-oracle, N8 smuggle, N10 single-packet, N11 CORS/cache, N12 fingerprint · ④ D5, D6, D7, D8 · then P2, P3.
-> (Session: 76 unit tests, build green, 145 tools.)
+> - ③ ✅ **N5** `graphql_probe` `ac16e71` · **N11** `cors_probe` + **N12** `recon_fingerprint` `7715f16`
+> - ② ✅ **C9** serialize-error surfacing `a3166d8`
+> - ⏳ Remaining: ② C6 (scanner loop), C7 (charset — runtime-verify), M2, M4, S7 · ③ N6 access-sweep, N7 injection-oracle, N8 smuggling, N10 single-packet race · ④ D5, D6, D7, D8 · P3.
+> (Session: 91 unit tests, build green, 148 tools.)
 
 **P0 — safety & correctness (do first; small, high-impact, verified):**
 1. Scope gate on all outbound HTTP (operator-controlled). — **S1**
