@@ -35,6 +35,7 @@ import com.burpmcp.ultra.tools.passiveintel.PassiveIntelTools
 import com.burpmcp.ultra.tools.jwt.JwtTools
 import com.burpmcp.ultra.tools.findings.FindingsTools
 import com.burpmcp.ultra.tools.recon.ReconTools
+import com.burpmcp.ultra.tools.graphql.GraphQlTools
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 
 /**
@@ -155,5 +156,8 @@ object ToolRegistry {
 
         // Recon: JS endpoint harvest, content discovery, param mining (scope-gated)
         ReconTools.register(server, bridges.recon)
+
+        // GraphQL: introspection + field-suggestion enumeration (scope-gated)
+        GraphQlTools.register(server, bridges.graphql)
     }
 }
