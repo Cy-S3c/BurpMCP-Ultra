@@ -306,6 +306,21 @@ class AnalysisBridge(private val api: MontoyaApi) {
                 }
             }
 
+            // JSON body leaf nodes — Burp's BODY params don't descend into nested JSON,
+            // so enumerate each scalar leaf as an insertion point (path notation: a.b[0].c).
+            val jsonBody = try { httpRequest.bodyToString() } catch (_: Exception) { "" }
+            val contentType = httpRequest.headers().firstOrNull { it.name().equals("Content-Type", true) }?.value() ?: ""
+            if (contentType.contains("json", true) || jsonBody.trimStart().startsWith("{") || jsonBody.trimStart().startsWith("[")) {
+                for ((jpath, jval) in com.burpmcp.ultra.core.JsonInsertionPoints.leaves(jsonBody)) {
+                    addJsonObject {
+                        put("type", "json_body")
+                        put("name", jpath)
+                        put("value", jval)
+                        put("base_value", jval)
+                    }
+                }
+            }
+
             // Cookie parameters
             for (param in httpRequest.parameters()) {
                 if (param.type().name.equals("COOKIE", ignoreCase = true)) {
