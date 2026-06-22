@@ -113,8 +113,9 @@ S1-S8 (§1 security), C1-C9 (§2 correctness), M1-M5 (§2 misplaced), N1-N12 (§
 > - ③ ✅ **N9** findings store `1232226` · **N2/N3/N4** recon trio — JS endpoints, content discovery, param mining `42f5f48`
 > - ③ ✅ **N5** `graphql_probe` `ac16e71` · **N11** `cors_probe` + **N12** `recon_fingerprint` `7715f16`
 > - ② ✅ **C9** serialize-error surfacing `a3166d8`
+> - 🛡️ **Adversarial self-review** (workflow: 5 dimensions + per-finding verification) found **7 real bugs in this session's own code** — all fixed in `449eb96`: [HIGH] scope-gate bypass via http_send_parallel/chain/fuzz/race (now all 6 paths gate through a centralized `ScopeGate`); [MED] chain-extract ReDoS (raw regex → SafeRegex); [MED] Jwt.crack empty-key crash; [MED] session cookie/body CRLF; [LOW] WARN-flag gaps in recon/graphql/webprobe; [LOW] per-path content-discovery scope; [LOW] hot-path body materialization.
 > - ⏳ Remaining: ② C6 (scanner loop), C7 (charset — runtime-verify), M2, M4, S7 · ③ N6 access-sweep, N7 injection-oracle, N8 smuggling, N10 single-packet race · ④ D5, D6, D7, D8 · P3.
-> (Session: 91 unit tests, build green, 148 tools.)
+> (Session: 92 unit tests, build green, 148 tools.)
 
 **P0 — safety & correctness (do first; small, high-impact, verified):**
 1. Scope gate on all outbound HTTP (operator-controlled). — **S1**
