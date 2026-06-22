@@ -3,11 +3,10 @@ package com.burpmcp.ultra.bridge
 import burp.api.montoya.MontoyaApi
 import burp.api.montoya.http.message.requests.HttpRequest
 import com.burpmcp.ultra.graphql.GraphQl
-import com.burpmcp.ultra.safety.ScopeDecision
-import com.burpmcp.ultra.safety.ScopeMode
-import com.burpmcp.ultra.safety.ScopePolicy
+import com.burpmcp.ultra.safety.ScopeGate
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -23,23 +22,12 @@ import kotlinx.serialization.json.put
  */
 class GraphQlBridge(private val api: MontoyaApi) {
 
-    private fun scopeBlocked(url: String): Boolean {
-        val mode = ScopeMode.fromString(
-            try { api.persistence().preferences().getString("mcp_scope_mode") } catch (_: Exception) { null }
-        )
-        if (mode == ScopeMode.OFF) return false
-        val inScope = try { api.scope().isInScope(url) } catch (_: Exception) { return false }
-        return ScopePolicy.decide(mode, inScope) == ScopeDecision.DENY
-    }
+    private val scopeGate = ScopeGate(api)
 
     fun probe(url: String): JsonObject {
-        if (scopeBlocked(url)) {
-            return buildJsonObject {
-                put("error", "Blocked by scope policy (mcp_scope_mode=enforce): $url is not in Burp's target scope.")
-                put("out_of_scope", true)
-            }
-        }
-        return try {
+        val check = scopeGate.check(url)
+        check.deny?.let { return it }
+        val result: JsonObject = try {
             val introBody = postQuery(url, GraphQl.INTROSPECTION_QUERY)
             val introJson = try { Json.parseToJsonElement(introBody).jsonObject } catch (_: Exception) { null }
 
@@ -69,6 +57,7 @@ class GraphQlBridge(private val api: MontoyaApi) {
         } catch (e: Exception) {
             buildJsonObject { put("error", "GraphQL probe failed: ${e.message}") }
         }
+        return if (check.warning != null) JsonObject(result + ("scope_warning" to JsonPrimitive(check.warning))) else result
     }
 
     private fun postQuery(url: String, query: String): String {

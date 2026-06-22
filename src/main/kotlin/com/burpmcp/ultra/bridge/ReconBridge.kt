@@ -4,9 +4,7 @@ import burp.api.montoya.MontoyaApi
 import burp.api.montoya.http.message.requests.HttpRequest
 import com.burpmcp.ultra.recon.JsEndpoints
 import com.burpmcp.ultra.recon.ReconHeuristics
-import com.burpmcp.ultra.safety.ScopeDecision
-import com.burpmcp.ultra.safety.ScopeMode
-import com.burpmcp.ultra.safety.ScopePolicy
+import com.burpmcp.ultra.safety.ScopeGate
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -26,19 +24,7 @@ class ReconBridge(private val api: MontoyaApi) {
         const val CALIBRATION_PATH = "/zzz_mcp_recon_calibration_404page"
     }
 
-    private fun scopeBlocked(url: String): Boolean {
-        val mode = ScopeMode.fromString(
-            try { api.persistence().preferences().getString("mcp_scope_mode") } catch (_: Exception) { null }
-        )
-        if (mode == ScopeMode.OFF) return false
-        val inScope = try { api.scope().isInScope(url) } catch (_: Exception) { return false }
-        return ScopePolicy.decide(mode, inScope) == ScopeDecision.DENY
-    }
-
-    private fun scopeError(url: String): JsonObject = buildJsonObject {
-        put("error", "Blocked by scope policy (mcp_scope_mode=enforce): $url is not in Burp's target scope.")
-        put("out_of_scope", true)
-    }
+    private val scopeGate = ScopeGate(api)
 
     /** GET [url], returning (status, bodyLength); (0,0) on failure. */
     private fun sendGet(url: String): Pair<Int, Int> = try {
@@ -83,12 +69,16 @@ class ReconBridge(private val api: MontoyaApi) {
     fun contentDiscovery(baseUrl: String, paths: List<String>): JsonObject {
         return try {
             val base = baseUrl.trimEnd('/')
-            if (scopeBlocked("$base/")) return scopeError(base)
+            val baseCheck = scopeGate.check("$base/")
+            baseCheck.deny?.let { return it }
             val (calStatus, calLen) = sendGet(base + CALIBRATION_PATH)
             val tested = paths.take(2000)
             val found = mutableListOf<JsonObject>()
+            var skippedOutOfScope = 0
             for (path in tested) {
                 val full = base + (if (path.startsWith("/")) path else "/$path")
+                // Per-path scope check: Burp scope can exclude specific paths under an in-scope host.
+                if (scopeGate.deny(full) != null) { skippedOutOfScope++; continue }
                 val (status, len) = sendGet(full)
                 if (ReconHeuristics.isInteresting(calStatus, calLen, status, len)) {
                     found.add(buildJsonObject { put("path", path); put("url", full); put("status", status); put("length", len) })
@@ -96,8 +86,10 @@ class ReconBridge(private val api: MontoyaApi) {
             }
             buildJsonObject {
                 put("base_url", base)
+                baseCheck.warning?.let { put("scope_warning", it) }
                 put("calibration", buildJsonObject { put("status", calStatus); put("length", calLen) })
                 put("tested", tested.size)
+                if (skippedOutOfScope > 0) put("skipped_out_of_scope", skippedOutOfScope)
                 put("found_count", found.size)
                 put("found", buildJsonArray { found.forEach { add(it) } })
             }
@@ -109,7 +101,8 @@ class ReconBridge(private val api: MontoyaApi) {
     /** Probe [candidates] as query params on [url], flagging those reflected in the response (injection candidates). */
     fun paramMine(url: String, candidates: List<String>): JsonObject {
         return try {
-            if (scopeBlocked(url)) return scopeError(url)
+            val check = scopeGate.check(url)
+            check.deny?.let { return it }
             val sep = if (url.contains("?")) "&" else "?"
             val tested = candidates.take(1000)
             val reflected = mutableListOf<JsonObject>()
@@ -124,6 +117,7 @@ class ReconBridge(private val api: MontoyaApi) {
             }
             buildJsonObject {
                 put("url", url)
+                check.warning?.let { put("scope_warning", it) }
                 put("marker", MARKER)
                 put("tested", tested.size)
                 put("reflected_count", reflected.size)

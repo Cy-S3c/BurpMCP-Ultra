@@ -40,6 +40,13 @@ class JwtTest {
     }
 
     @Test
+    fun `crack tolerates an empty candidate and still finds the secret`() {
+        // An empty key makes JCA's SecretKeySpec throw "Empty key"; crack must skip
+        // it (and any bad candidate) instead of aborting the whole wordlist.
+        assertEquals("your-256-bit-secret", Jwt.crack(token, listOf("", "wrong", "your-256-bit-secret")))
+    }
+
+    @Test
     fun `forgeNone produces alg-none variants with an empty signature`() {
         val forged = Jwt.forgeNone(token)
         assertTrue(forged.size >= 3)

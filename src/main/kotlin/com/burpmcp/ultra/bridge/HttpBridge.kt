@@ -6,9 +6,7 @@ import burp.api.montoya.http.HttpService
 import burp.api.montoya.http.message.params.HttpParameter
 import com.burpmcp.ultra.safety.HeaderSafety
 import com.burpmcp.ultra.safety.SafeRegex
-import com.burpmcp.ultra.safety.ScopeDecision
-import com.burpmcp.ultra.safety.ScopeMode
-import com.burpmcp.ultra.safety.ScopePolicy
+import com.burpmcp.ultra.safety.ScopeGate
 import burp.api.montoya.http.handler.HttpHandler
 import burp.api.montoya.http.handler.HttpRequestToBeSent
 import burp.api.montoya.http.handler.HttpResponseReceived
@@ -109,7 +107,7 @@ class HttpBridge(
             val mode = resolveHttpMode(httpMode)
 
             val targetUrl = try { httpRequest.url() } catch (_: Exception) { url ?: "" }
-            val scope = checkScope(targetUrl)
+            val scope = scopeGate.check(targetUrl)
             scope.deny?.let { return it }
 
             val startTime = System.nanoTime()
@@ -166,6 +164,17 @@ class HttpBridge(
                     Built(idx, httpReq, null)
                 } catch (e: Exception) {
                     Built(idx, null, e.message ?: "Failed to build request")
+                }
+            }
+
+            // Operator scope gate: under ENFORCE, refuse the whole batch if any target is
+            // out of scope, so batching can't bypass the gate http_send_request enforces.
+            val outOfScope = built.mapNotNull { b -> b.request?.url()?.takeIf { scopeGate.deny(it) != null } }
+            if (outOfScope.isNotEmpty()) {
+                return buildJsonObject {
+                    put("error", "Blocked by scope policy: ${outOfScope.size} request(s) target out-of-scope hosts (mcp_scope_mode=enforce).")
+                    put("out_of_scope", true)
+                    put("blocked_urls", buildJsonArray { outOfScope.distinct().take(20).forEach { add(it) } })
                 }
             }
 
@@ -288,6 +297,17 @@ class HttpBridge(
 
                 val httpRequest = buildRequest(reqUrl, reqMethod, reqHeaders, reqBody, rawReq, reqHost, reqPort, reqTls)
 
+                val scopeDeny = scopeGate.deny(httpRequest.url())
+                if (scopeDeny != null) {
+                    stepResults.add(buildJsonObject {
+                        put("step", index)
+                        put("success", false)
+                        put("out_of_scope", true)
+                        put("error", "Blocked by scope policy: step target is not in Burp's scope (mcp_scope_mode=enforce).")
+                    })
+                    if (stopOnError) break else continue
+                }
+
                 val startTime = System.nanoTime()
                 val result = api.http().sendRequest(httpRequest, mode)
                 val elapsedMs = (System.nanoTime() - startTime) / 1_000_000
@@ -312,8 +332,7 @@ class HttpBridge(
                         result.response()?.bodyToString() ?: ""
                     }
 
-                    val regex = Regex(pattern)
-                    val match = regex.find(searchText)
+                    val match = SafeRegex.find(pattern, searchText)
                     if (match != null) {
                         val extractedValue = if (match.groupValues.size > 1) {
                             match.groupValues[1]
@@ -569,11 +588,12 @@ class HttpBridge(
 
                 // Session-handling rules: inject previously-extracted values into the request.
                 val reqUrl = requestToBeSent.url()
+                val reqSuiteInScope = if (stateManager.sessionRules.any { it.enabled && it.lastExtractedValue != null })
+                    (try { api.scope().isInScope(reqUrl) } catch (_: Exception) { false }) else false
                 for (rule in stateManager.sessionRules) {
                     if (!rule.enabled) continue
                     val value = rule.lastExtractedValue ?: continue
-                    val suiteInScope = try { api.scope().isInScope(reqUrl) } catch (_: Exception) { false }
-                    if (!SessionRuleEngine.inScope(rule, reqUrl, suiteInScope)) continue
+                    if (!SessionRuleEngine.inScope(rule, reqUrl, reqSuiteInScope)) continue
                     val before = currentRequest
                     currentRequest = applySessionInjection(rule, currentRequest, value)
                     if (currentRequest !== before) {
@@ -618,13 +638,15 @@ class HttpBridge(
 
                 // Session-handling rules: extract token/CSRF values for later injection.
                 val respUrl = try { responseReceived.initiatingRequest()?.url() ?: "" } catch (_: Exception) { "" }
+                val respSuiteInScope = if (stateManager.sessionRules.any { it.enabled })
+                    (try { api.scope().isInScope(respUrl) } catch (_: Exception) { false }) else false
+                val lazyBody = lazy { try { currentResponse.bodyToString() } catch (_: Exception) { "" } }
                 for (rule in stateManager.sessionRules) {
                     if (!rule.enabled) continue
-                    val suiteInScope = try { api.scope().isInScope(respUrl) } catch (_: Exception) { false }
-                    if (!SessionRuleEngine.inScope(rule, respUrl, suiteInScope)) continue
+                    if (!SessionRuleEngine.inScope(rule, respUrl, respSuiteInScope)) continue
                     val headerValue = if (rule.extractFrom.equals("header", true) && rule.extractHeaderName != null)
                         try { currentResponse.headerValue(rule.extractHeaderName) } catch (_: Exception) { null } else null
-                    val body = try { currentResponse.bodyToString() } catch (_: Exception) { "" }
+                    val body = if (rule.extractFrom.equals("body", true)) lazyBody.value else ""
                     val extracted = SessionRuleEngine.extract(rule, headerValue, body)
                     if (extracted != null && extracted != rule.lastExtractedValue) {
                         rule.lastExtractedValue = extracted
@@ -661,8 +683,15 @@ class HttpBridge(
                 if (HeaderSafety.isValidHeaderName(rule.injectName) && HeaderSafety.isValidHeaderValue(rendered))
                     request.withUpdatedHeader(rule.injectName, rendered)
                 else request
-            "cookie" -> upsertParam(request, HttpParameter.cookieParameter(rule.injectName, rendered))
-            "body" -> upsertParam(request, HttpParameter.bodyParameter(rule.injectName, rendered))
+            "cookie" ->
+                // Cookies serialize into a header — a CRLF in name/value is header injection.
+                if (!HeaderSafety.containsCrlf(rule.injectName) && !HeaderSafety.containsCrlf(rendered))
+                    upsertParam(request, HttpParameter.cookieParameter(rule.injectName, rendered))
+                else request
+            "body" ->
+                if (!HeaderSafety.containsCrlf(rule.injectName) && !HeaderSafety.containsCrlf(rendered))
+                    upsertParam(request, HttpParameter.bodyParameter(rule.injectName, rendered))
+                else request
             else -> request
         }
     }
@@ -1042,7 +1071,7 @@ class HttpBridge(
             val mode = resolveHttpMode(httpMode)
 
             val targetUrl = try { httpRequest.url() } catch (_: Exception) { (if (useTls) "https" else "http") + "://$host:$port/" }
-            val scope = checkScope(targetUrl)
+            val scope = scopeGate.check(targetUrl)
             scope.deny?.let { return it }
 
             val startTime = System.nanoTime()
@@ -1065,42 +1094,8 @@ class HttpBridge(
     // Scope policy gate (operator-controlled; the agent cannot change it)
     // ---------------------------------------------------------------
 
-    /** Reads the operator-set enforcement mode from Burp preferences (key `mcp_scope_mode`). */
-    private fun scopeMode(): ScopeMode =
-        ScopeMode.fromString(
-            try { api.persistence().preferences().getString("mcp_scope_mode") } catch (_: Exception) { null }
-        )
-
-    /** Result of a scope check: [deny] (return it to block the send) and/or a [warning] to attach. */
-    private data class ScopeCheck(val deny: JsonObject?, val warning: String?)
-
-    /**
-     * Evaluates an outbound [url] against Burp's target scope under the operator
-     * policy. Fails open (allows) when scope cannot be evaluated, so a Burp
-     * quirk never blocks legitimate work.
-     */
-    private fun checkScope(url: String): ScopeCheck {
-        val mode = scopeMode()
-        if (mode == ScopeMode.OFF) return ScopeCheck(null, null)
-        val inScope = try { api.scope().isInScope(url) } catch (_: Exception) { return ScopeCheck(null, null) }
-        return when (ScopePolicy.decide(mode, inScope)) {
-            ScopeDecision.DENY -> ScopeCheck(
-                buildJsonObject {
-                    put(
-                        "error",
-                        "Blocked by scope policy: target is not in Burp's scope. An operator can allow it by " +
-                            "adding it to Burp's target scope or setting preference mcp_scope_mode to 'warn' or 'off'."
-                    )
-                    put("out_of_scope", true)
-                    put("url", url)
-                    put("scope_mode", "enforce")
-                },
-                null
-            )
-            ScopeDecision.WARN -> ScopeCheck(null, "out_of_scope: target is not in Burp's target scope")
-            ScopeDecision.ALLOW -> ScopeCheck(null, null)
-        }
-    }
+    /** Shared, centralized scope gate used by EVERY outbound path in this bridge. */
+    private val scopeGate = ScopeGate(api)
 
     /** Returns [base] with a `scope_warning` field appended when [warning] is non-null. */
     private fun withScopeWarning(base: JsonObject, warning: String?): JsonObject =
@@ -1148,6 +1143,7 @@ class HttpBridge(
         return try {
             val service = HttpService.httpService(host, port, useTls)
             val mode = resolveHttpMode(httpMode)
+            scopeGate.deny((if (useTls) "https" else "http") + "://$host:$port/")?.let { return it }
             val results = mutableListOf<JsonObject>()
 
             // Normalize the request string: convert literal \r\n to CRLF, bare \n to CRLF
@@ -1303,6 +1299,7 @@ class HttpBridge(
         return try {
             val service = HttpService.httpService(host, port, useTls)
             val mode = resolveHttpMode(httpMode)
+            scopeGate.deny((if (useTls) "https" else "http") + "://$host:$port/")?.let { return it }
 
             // Normalize request
             val baseRequest = request

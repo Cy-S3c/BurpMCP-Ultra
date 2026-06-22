@@ -74,7 +74,9 @@ object Jwt {
         val alg = p.alg ?: return null
         if (jcaAlg(alg) == null) return null
         for (c in candidates) {
-            if (hmac(p.signingInput, c.toByteArray(Charsets.UTF_8), alg) == p.signature) return c
+            if (c.isEmpty()) continue // JCA rejects a zero-length HMAC key ("Empty key"); skip, don't abort the run
+            val sig = try { hmac(p.signingInput, c.toByteArray(Charsets.UTF_8), alg) } catch (_: Exception) { null }
+            if (sig != null && sig == p.signature) return c
         }
         return null
     }
