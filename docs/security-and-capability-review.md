@@ -114,8 +114,10 @@ S1-S8 (§1 security), C1-C9 (§2 correctness), M1-M5 (§2 misplaced), N1-N12 (§
 > - ③ ✅ **N5** `graphql_probe` `ac16e71` · **N11** `cors_probe` + **N12** `recon_fingerprint` `7715f16`
 > - ② ✅ **C9** serialize-error surfacing `a3166d8`
 > - 🛡️ **Adversarial self-review** (workflow: 5 dimensions + per-finding verification) found **7 real bugs in this session's own code** — all fixed in `449eb96`: [HIGH] scope-gate bypass via http_send_parallel/chain/fuzz/race (now all 6 paths gate through a centralized `ScopeGate`); [MED] chain-extract ReDoS (raw regex → SafeRegex); [MED] Jwt.crack empty-key crash; [MED] session cookie/body CRLF; [LOW] WARN-flag gaps in recon/graphql/webprobe; [LOW] per-path content-discovery scope; [LOW] hot-path body materialization.
-> - ⏳ Remaining: ② C6 (scanner loop), C7 (charset — runtime-verify), M2, M4, S7 · ③ N6 access-sweep, N7 injection-oracle, N8 smuggling, N10 single-packet race · ④ D5, D6, D7, D8 · P3.
-> (Session: 92 unit tests, build green, 148 tools.)
+> - ④ ✅ **D8** JSON-body insertion points `35e9b35` · **D7** payload libraries for http_fuzz `ffdf526` · ③ ✅ **N6** access_control_sweep + scope-gated auth_diff `10ae737`
+> - ❌ **D6** intruder-results retrieval is INFEASIBLE — Montoya's Intruder API is fire-and-forget (sendToIntruder + register processors only; no result readback). Use http_fuzz for programmatic fuzzing results.
+> - ⏳ Remaining: ② C6 (scanner loop), C7 (charset — runtime-verify), M2, M4, S7 · ③ N7 injection-oracle, N8 smuggling, N10 single-packet race · ④ D5 ScanCheck-chaining, D7 cluster-bomb mode · P3.
+> (Session: 101 unit tests, build green, 149 tools.)
 
 **P0 — safety & correctness (do first; small, high-impact, verified):**
 1. Scope gate on all outbound HTTP (operator-controlled). — **S1**
