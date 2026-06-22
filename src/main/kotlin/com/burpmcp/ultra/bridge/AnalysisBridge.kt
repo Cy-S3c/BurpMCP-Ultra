@@ -5,6 +5,7 @@ import burp.api.montoya.http.message.requests.HttpRequest
 import burp.api.montoya.http.message.responses.HttpResponse
 import burp.api.montoya.http.HttpService
 import burp.api.montoya.sitemap.SiteMapFilter
+import com.burpmcp.ultra.safety.ScopeGate
 import kotlinx.serialization.json.*
 
 /**
@@ -13,6 +14,8 @@ import kotlinx.serialization.json.*
  * parameter extraction, diff comparison, and response body searching.
  */
 class AnalysisBridge(private val api: MontoyaApi) {
+
+    private val scopeGate = ScopeGate(api)
 
     /**
      * Parses a raw HTTP request and extracts its components: method, URL,
@@ -471,6 +474,7 @@ class AnalysisBridge(private val api: MontoyaApi) {
     ): JsonObject {
         return try {
             val service = HttpService.httpService(host, port, useTls)
+            scopeGate.deny((if (useTls) "https" else "http") + "://$host:$port/")?.let { return it }
             // Normalize request
             val baseRequest = request
                 .replace("\\r\\n", "\r\n")

@@ -40,7 +40,8 @@ class BridgeFactory {
         val findings: FindingsBridge,
         val recon: ReconBridge,
         val graphql: GraphQlBridge,
-        val webProbe: WebProbeBridge
+        val webProbe: WebProbeBridge,
+        val accessControl: AccessControlBridge
     )
 
     companion object {
@@ -85,7 +86,8 @@ class BridgeFactory {
                 findings = FindingsBridge(stateManager),
                 recon = ReconBridge(api),
                 graphql = GraphQlBridge(api),
-                webProbe = WebProbeBridge(api)
+                webProbe = WebProbeBridge(api),
+                accessControl = AccessControlBridge(api)
             )
         }
     }
