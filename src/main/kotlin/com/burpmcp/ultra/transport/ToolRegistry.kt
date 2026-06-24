@@ -38,6 +38,7 @@ import com.burpmcp.ultra.tools.recon.ReconTools
 import com.burpmcp.ultra.tools.graphql.GraphQlTools
 import com.burpmcp.ultra.tools.webprobe.WebProbeTools
 import com.burpmcp.ultra.tools.accesscontrol.AccessControlTools
+import com.burpmcp.ultra.tools.injection.InjectionTools
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 
 /**
@@ -167,5 +168,8 @@ object ToolRegistry {
 
         // Access-control sweep: batch broken-access-control / IDOR across identities (scope-gated)
         AccessControlTools.register(server, bridges.accessControl)
+
+        // Injection probe: guided sqli/ssti/lfi detection with confirmation oracles (scope-gated)
+        InjectionTools.register(server, bridges.injection)
     }
 }

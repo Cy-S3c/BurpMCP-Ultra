@@ -41,7 +41,8 @@ class BridgeFactory {
         val recon: ReconBridge,
         val graphql: GraphQlBridge,
         val webProbe: WebProbeBridge,
-        val accessControl: AccessControlBridge
+        val accessControl: AccessControlBridge,
+        val injection: InjectionBridge
     )
 
     companion object {
@@ -87,7 +88,8 @@ class BridgeFactory {
                 recon = ReconBridge(api),
                 graphql = GraphQlBridge(api),
                 webProbe = WebProbeBridge(api),
-                accessControl = AccessControlBridge(api)
+                accessControl = AccessControlBridge(api),
+                injection = InjectionBridge(api)
             )
         }
     }
