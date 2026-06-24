@@ -64,13 +64,23 @@ Output: `build/libs/burpmcp-ultra-2.1.0.jar` (13 MB)
   "mcpServers": {
     "burp": {
       "type": "sse",
-      "url": "http://127.0.0.1:9876/sse"
+      "url": "http://127.0.0.1:9876/",
+      "headers": {
+        "Authorization": "Bearer PASTE_TOKEN_FROM_SERVER_TAB"
+      }
     }
   }
 }
 ```
 
 Add to `~/.claude.json` or your project's `.mcp.json`.
+
+> ⚠️ **The token is required, and the endpoint is the root path `/` — not `/sse`.**
+> Copy the token from the **Server** tab of the BurpMCP-Ultra panel in Burp (it is
+> also accepted as a `?token=…` query parameter or an `mcp_token` cookie). Without
+> it the server returns `401`, and clients like Claude Code then fall back to OAuth
+> discovery and fail with `SDK auth failed: HTTP 404: Invalid OAuth error response`
+> (GitHub issue #1).
 
 ### 4. Open Dashboard
 
@@ -90,11 +100,18 @@ The simplest setup. Add to your MCP config:
   "mcpServers": {
     "burp": {
       "type": "sse",
-      "url": "http://127.0.0.1:9876/sse"
+      "url": "http://127.0.0.1:9876/",
+      "headers": {
+        "Authorization": "Bearer PASTE_TOKEN_FROM_SERVER_TAB"
+      }
     }
   }
 }
 ```
+
+The token comes from the **Server** tab of the BurpMCP-Ultra panel. The endpoint is
+the root path `/` (not `/sse`); the token may instead be passed as `?token=…` in the
+URL or an `mcp_token` cookie.
 
 Config file locations:
 - Global: `~/.claude.json`
@@ -138,7 +155,10 @@ Then use port 9900 in your MCP config:
   "mcpServers": {
     "burp": {
       "type": "sse",
-      "url": "http://127.0.0.1:9900/sse"
+      "url": "http://127.0.0.1:9900/",
+      "headers": {
+        "Authorization": "Bearer PASTE_TOKEN_FROM_SERVER_TAB"
+      }
     }
   }
 }
@@ -158,7 +178,7 @@ Claude Desktop only supports stdio transport. Use supergateway as a bridge:
   "mcpServers": {
     "burp": {
       "command": "npx",
-      "args": ["-y", "supergateway", "--sse", "http://127.0.0.1:9876/sse"]
+      "args": ["-y", "supergateway", "--sse", "http://127.0.0.1:9876/", "--header", "Authorization: Bearer PASTE_TOKEN_FROM_SERVER_TAB"]
     }
   }
 }

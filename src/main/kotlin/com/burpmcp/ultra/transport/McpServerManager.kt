@@ -104,9 +104,10 @@ class McpServerManager(
      *
      * Each server is hardened via [installLocalhostSecurity] (Host-header
      * allowlist + locked CORS + per-session token) before mounting the MCP
-     * SSE transport via [mcp]. The [mcp] extension auto-installs the Ktor SSE
-     * plugin and registers GET /sse (streaming) and POST /message (back-channel)
-     * endpoints. Both require the auth token.
+     * SSE transport via [mcp]. The [mcp] extension mounts the SSE stream at the
+     * ROOT path '/' (GET) with a POST back-channel keyed by a sessionId query
+     * param — NOT '/sse'. Both require the auth token (Authorization: Bearer,
+     * an mcp_token cookie, or a ?token= query param).
      */
     fun start() {
         startTransport("Primary SSE", ssePort) { sseServer = it }
