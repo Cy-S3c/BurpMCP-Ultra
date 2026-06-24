@@ -117,8 +117,9 @@ S1-S8 (§1 security), C1-C9 (§2 correctness), M1-M5 (§2 misplaced), N1-N12 (§
 > - ④ ✅ **D8** JSON-body insertion points `35e9b35` · **D7** payload libraries for http_fuzz `ffdf526` · ③ ✅ **N6** access_control_sweep + scope-gated auth_diff `10ae737`
 > - ❌ **D6** intruder-results retrieval is INFEASIBLE — Montoya's Intruder API is fire-and-forget (sendToIntruder + register processors only; no result readback). Use http_fuzz for programmatic fuzzing results.
 > - 🛡️ **2nd review round** (post-ScopeGate refactor): the multi-agent pass was server-rate-limited, so I solo-audited every outbound `api.http().sendRequest` in the bridge package — found + fixed one more ungated agent-controlled path, `api_import_openapi` (`4a9f7e4`). ScannerBridge/ScanCheckBridge sends are Burp-scanner-driven (operator-chosen target, already scoped) and correctly left. Tool names 149/149 unique.
-> - ⏳ Remaining: ② C6 (scanner loop), C7 (charset — runtime-verify), M2, M4, S7 · ③ N7 injection-oracle, N8 smuggling, N10 single-packet race · ④ D5 ScanCheck-chaining, D7 cluster-bomb mode · P3.
-> (Session: 101 unit tests, build green, 149 tools.)
+> - ③ ✅ **N7** injection_probe — sqli/ssti/lfi with confirmation oracles `6b45156`
+> - ⏳ Remaining: ② C6 (scanner loop), C7 (charset — runtime-verify), M2, M4, S7 · ③ N8 smuggling, N10 single-packet race (both need live-Burp iteration to build/verify well) · ④ D5 ScanCheck-chaining, D7 cluster-bomb mode · P3.
+> (Session: 105 unit tests, build green, 150 tools. The high-value, verifiable-without-runtime roadmap is essentially done; what remains needs a live Burp or is low-value cleanup.)
 
 **P0 — safety & correctness (do first; small, high-impact, verified):**
 1. Scope gate on all outbound HTTP (operator-controlled). — **S1**
