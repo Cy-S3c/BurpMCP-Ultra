@@ -12,9 +12,9 @@ out/
 .DS_Store
 Thumbs.db
 
-# Gradle wrapper JAR (will be downloaded)
-# Keep gradle-wrapper.properties but not the JAR
-gradle/wrapper/gradle-wrapper.jar
+# NOTE: gradle/wrapper/gradle-wrapper.jar is intentionally committed (NOT ignored).
+# It is required for ./gradlew (Linux/macOS) and gradlew.bat (Windows) to run after
+# a fresh clone. Excluding it broke first-time builds on every OS (GitHub issue #2).
 
 # Test files
 test_*.py

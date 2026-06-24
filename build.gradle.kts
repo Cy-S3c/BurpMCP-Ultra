@@ -7,7 +7,13 @@ plugins {
 group = "com.v0rt3x.burpmcp"
 version = "2.1.0"
 
-// Pin the build to a JDK 17 toolchain on every OS (Windows / macOS / Linux).
+// Build-JDK (GitHub issue #2): Kotlin 2.1.20 cannot even COMPILE the Gradle .kts
+// scripts under Java 22+ (cryptic "25.0.3" crash), so a script-level version
+// guard is impossible. gradle/gradle-daemon-jvm.properties pins the Gradle daemon
+// to a JDK 17 toolchain, so `./gradlew` auto-runs the build under JDK 17 even
+// when launched with Burp's bundled Java 25 (requires a JDK 17 installed/discoverable).
+
+// Pin compilation to a JDK 17 toolchain on every OS (Windows / macOS / Linux).
 // Gradle auto-detects an installed JDK 17 and uses it to compile, regardless of
 // which JVM launched Gradle. This guarantees the fat JAR is always Java 17
 // bytecode and fixes the "built with Burp's bundled Java 25 -> MCP SSE ports

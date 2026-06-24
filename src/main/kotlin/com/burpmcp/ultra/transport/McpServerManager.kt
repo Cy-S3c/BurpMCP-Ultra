@@ -109,43 +109,62 @@ class McpServerManager(
      * endpoints. Both require the auth token.
      */
     fun start() {
-        // Launch primary SSE transport
+        startTransport("Primary SSE", ssePort) { sseServer = it }
+        startTransport("Secondary SSE", httpPort) { httpServer = it }
+    }
+
+    /**
+     * Launches one CIO transport on [port] and VERIFIES it actually bound.
+     *
+     * `start(wait = false)` returns before Ktor's CIO engine has bound the
+     * socket, and a bind failure surfaces on the engine's own coroutines — not
+     * the launching one — so a plain try/catch logs a false "started" while the
+     * port never opens. That is the GitHub issue #2/#3 symptom: the UI shows
+     * "running", 9876/9877 never listen, and there is no error. We therefore
+     * actively probe the port and log a loud, actionable error if it didn't come
+     * up (the usual cause is a JAR built with Java 22+).
+     */
+    private fun startTransport(
+        label: String,
+        port: Int,
+        assign: (EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>) -> Unit
+    ) {
         scope.launch {
             try {
-                sseServer = embeddedServer(CIO, port = ssePort, host = "127.0.0.1") {
-                    installLocalhostSecurity(authToken, listOf(ssePort))
+                val server = embeddedServer(CIO, port = port, host = "127.0.0.1") {
+                    installLocalhostSecurity(authToken, listOf(port))
                     mcp(serverFactory())
-                }.also { it.start(wait = false) }
+                }
+                server.start(wait = false)
+                assign(server)
 
-                logging.logToOutput("BurpMCP-Ultra: SSE transport started on port $ssePort")
-                logging.logToOutput("BurpMCP-Ultra: Connect MCP clients to http://127.0.0.1:$ssePort/sse")
+                if (verifyListening(port)) {
+                    logging.logToOutput("BurpMCP-Ultra: $label transport listening on http://127.0.0.1:$port (MCP SSE endpoint is the root path '/', not '/sse')")
+                } else {
+                    logging.logToError(
+                        "BurpMCP-Ultra: $label transport reported start() but port $port is NOT listening. " +
+                            "This is the GitHub issue #2/#3 symptom — almost always a JAR built with Java 22+ " +
+                            "(Kotlin/Ktor/MCP-SDK incompatibility). Rebuild with a JDK 17-21 (NOT Burp's bundled Java 25)."
+                    )
+                }
             } catch (e: Exception) {
-                logging.logToError(
-                    "BurpMCP-Ultra: Failed to start SSE transport on port $ssePort: ${e.message}"
-                )
+                logging.logToError("BurpMCP-Ultra: Failed to start $label transport on port $port: ${e.message}")
                 logging.logToError("BurpMCP-Ultra: Stack trace: ${e.stackTraceToString()}")
             }
         }
+    }
 
-        // Launch secondary SSE transport on a separate port
-        scope.launch {
+    /** Probes 127.0.0.1:[port] for up to ~3s to confirm the engine actually bound the socket. */
+    private suspend fun verifyListening(port: Int): Boolean {
+        repeat(15) {
             try {
-                httpServer = embeddedServer(CIO, port = httpPort, host = "127.0.0.1") {
-                    installLocalhostSecurity(authToken, listOf(httpPort))
-                    mcp(serverFactory())
-                }.also { it.start(wait = false) }
-
-                logging.logToOutput(
-                    "BurpMCP-Ultra: Secondary SSE transport started on port $httpPort"
-                )
-                logging.logToOutput("BurpMCP-Ultra: Connect MCP clients to http://127.0.0.1:$httpPort/sse")
-            } catch (e: Exception) {
-                logging.logToError(
-                    "BurpMCP-Ultra: Failed to start secondary SSE transport on port $httpPort: ${e.message}"
-                )
-                logging.logToError("BurpMCP-Ultra: Stack trace: ${e.stackTraceToString()}")
+                java.net.Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", port), 200) }
+                return true
+            } catch (_: Exception) {
+                kotlinx.coroutines.delay(200)
             }
         }
+        return false
     }
 
     /**

@@ -49,7 +49,7 @@ cd BurpMCP-Ultra
 ./gradlew shadowJar
 ```
 
-Output: `build/libs/burpmcp-ultra-2.0.1.jar` (13 MB)
+Output: `build/libs/burpmcp-ultra-2.1.0.jar` (13 MB)
 
 ### 2. Load into Burp
 
@@ -481,18 +481,53 @@ Open **http://127.0.0.1:9878** for the real-time dashboard:
 
 ## Requirements
 
+**To run the extension (inside Burp):**
 - Burp Suite Professional 2025.x or later
-- Java 17+ (included in Burp's bundled JRE)
-- Gradle 8.x (included via wrapper)
+- Java 17+ — provided by Burp's bundled JRE (nothing to install)
+
+**To build from source:**
+- A **JDK 17–21** (LTS) installed. Building under Java 22+ (including Burp's
+  bundled Java 25) is incompatible with the Kotlin 2.1.20 / Ktor 3.2.3 / MCP SDK
+  toolchain and yields a JAR whose MCP SSE ports (9876/9877) silently fail to
+  bind. You do **not** need JDK 17 as your default, though: the build pins both
+  compilation and the Gradle daemon to a JDK 17 toolchain
+  (`gradle/gradle-daemon-jvm.properties`), so `./gradlew` auto-runs under JDK 17
+  as long as one is installed and discoverable.
+- Gradle 8.x — included via the committed wrapper (`./gradlew` / `gradlew.bat`).
 
 ## Building from Source
 
+The Gradle wrapper is committed, so no separate Gradle install is needed. Use a
+**JDK 17–21** to run the build (see Requirements above).
+
+**Linux / macOS:**
 ```bash
 git clone https://github.com/Cy-S3c/BurpMCP-Ultra.git
 cd BurpMCP-Ultra
+# Gradle auto-selects an installed JDK 17 for the build daemon, so this works even
+# if your default `java` is Burp's Java 25. If no JDK 17 is discoverable, install
+# one (or point JAVA_HOME at it).
 ./gradlew shadowJar
-# Output: build/libs/burpmcp-ultra-2.0.1.jar
+# Output: build/libs/burpmcp-ultra-2.1.0.jar
 ```
+
+**Windows (PowerShell / cmd):**
+```bat
+git clone https://github.com/Cy-S3c/BurpMCP-Ultra.git
+cd BurpMCP-Ultra
+:: Gradle auto-selects an installed JDK 17 for the build daemon, so this works even
+:: if your default java is Burp's Java 25. If no JDK 17 is discoverable, install
+:: one (or set JAVA_HOME to it).
+gradlew.bat shadowJar
+:: Output: build\libs\burpmcp-ultra-2.1.0.jar
+```
+
+> You only need a JDK 17 *installed* — `gradle/gradle-daemon-jvm.properties` makes
+> Gradle relaunch its daemon on JDK 17 even when `./gradlew` is launched with a
+> newer JVM (e.g. Burp's Java 25). This is required because Kotlin 2.1.20 cannot
+> even *compile* the Gradle build scripts under Java 22+. If no JDK 17 is found,
+> Gradle fails with a clear "no compatible daemon JVM" error instead of silently
+> producing a broken JAR.
 
 ## Project Structure
 
