@@ -13,6 +13,7 @@ class ApiImportBridge(
     private val api: MontoyaApi,
     private val stateManager: StateManager
 ) {
+    private val scopeGate = com.burpmcp.ultra.safety.ScopeGate(api)
     /**
      * Parse an OpenAPI/Swagger spec and generate requests for all endpoints.
      * Adds them to Burp's sitemap and optionally to scope.
@@ -79,6 +80,7 @@ class ApiImportBridge(
             val endpoints = mutableListOf<JsonObject>()
             var requestsSent = 0
             var addedToSitemap = 0
+            var skippedOutOfScope = 0
 
             for ((path, pathItem) in paths) {
                 val pathObj = pathItem.jsonObject
@@ -172,7 +174,10 @@ class ApiImportBridge(
 
                     // Send or just add to sitemap
                     if (sendRequests) {
-                        try {
+                        if (scopeGate.deny(httpRequest.url()) != null) {
+                            // Operator scope policy (mcp_scope_mode=enforce): don't send out-of-scope.
+                            skippedOutOfScope++
+                        } else try {
                             val result = api.http().sendRequest(httpRequest)
                             if (addToSitemap) {
                                 api.siteMap().add(result)
@@ -207,6 +212,7 @@ class ApiImportBridge(
                 put("base_url", resolvedBaseUrl)
                 put("total_endpoints", endpoints.size)
                 put("requests_sent", requestsSent)
+                put("skipped_out_of_scope", skippedOutOfScope)
                 put("added_to_sitemap", addedToSitemap)
                 put("added_to_scope", addToScope)
                 put("endpoints", buildJsonArray { endpoints.forEach { add(it) } })
