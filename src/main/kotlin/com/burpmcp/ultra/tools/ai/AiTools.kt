@@ -3,6 +3,7 @@ package com.burpmcp.ultra.tools.ai
 import com.burpmcp.ultra.bridge.AiBridge
 import com.burpmcp.ultra.core.asStringList
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
@@ -16,7 +17,8 @@ object AiTools {
             name = "ai_status",
             description = "Check whether Burp Suite's AI feature is enabled and " +
                 "available. Returns the current AI status. This feature is only " +
-                "available in Burp Suite Professional 2025+ editions."
+                "available in Burp Suite Professional 2025+ editions.",
+            inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList())
         ) { request ->
             try {
                 val result = bridge.isEnabled()
@@ -37,7 +39,18 @@ object AiTools {
                 "and remediation advice. Parameters: messages (required, array of " +
                 "strings forming the prompt), context (optional string providing " +
                 "additional background context for the AI). Requires Burp Suite " +
-                "Professional with AI enabled."
+                "Professional with AI enabled.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("messages") {
+                        put("type", "array")
+                        put("description", "Array of strings forming the prompt")
+                        putJsonObject("items") { put("type", "string") }
+                    }
+                    putJsonObject("context") { put("type", "string"); put("description", "Additional background context for the AI") }
+                },
+                required = listOf("messages")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()

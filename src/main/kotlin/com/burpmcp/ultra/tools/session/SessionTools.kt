@@ -4,6 +4,7 @@ import com.burpmcp.ultra.bridge.HttpBridge
 import com.burpmcp.ultra.bridge.SessionBridge
 import com.burpmcp.ultra.state.StateManager
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
@@ -37,7 +38,22 @@ object SessionTools {
                 "inject_into (string, 'header', 'body', or 'cookie'), " +
                 "inject_name (string, name of the header/cookie/parameter to inject into), " +
                 "inject_value_template (string, template where {value} is replaced with extracted value), " +
-                "enabled (boolean, whether the rule is active; defaults to true)."
+                "enabled (boolean, whether the rule is active; defaults to true).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("rule_name") { put("type", "string"); put("description", "Unique name for this rule") }
+                    putJsonObject("scope") { put("type", "string"); put("description", "'all', 'suite', or 'custom'") }
+                    putJsonObject("scope_pattern") { put("type", "string"); put("description", "URL pattern when scope is 'custom'") }
+                    putJsonObject("extract_from") { put("type", "string"); put("description", "'header' or 'body'") }
+                    putJsonObject("extract_header_name") { put("type", "string"); put("description", "Header name when extracting from headers") }
+                    putJsonObject("extract_regex") { put("type", "string"); put("description", "Regex with a capture group for the value to extract") }
+                    putJsonObject("inject_into") { put("type", "string"); put("description", "'header', 'body', or 'cookie'") }
+                    putJsonObject("inject_name") { put("type", "string"); put("description", "Name of the header/cookie/parameter to inject into") }
+                    putJsonObject("inject_value_template") { put("type", "string"); put("description", "Template where {value} is replaced with extracted value") }
+                    putJsonObject("enabled") { put("type", "boolean"); put("description", "Whether the rule is active; defaults to true") }
+                },
+                required = listOf("rule_name", "scope", "extract_from", "extract_regex", "inject_into", "inject_name", "inject_value_template")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -98,7 +114,8 @@ object SessionTools {
             name = "session_list_rules",
             description = "List all session handling rules including their extraction/injection " +
                 "configuration, enabled status, and the last extracted value for each rule. " +
-                "No parameters required."
+                "No parameters required.",
+            inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList())
         ) { _ ->
             try {
                 val result = bridge.listRules()
@@ -116,7 +133,13 @@ object SessionTools {
             name = "session_remove_rule",
             description = "Remove a session handling rule by its name. The rule will no longer " +
                 "extract or inject values for matching requests. " +
-                "Parameters: rule_name (string, the name of the rule to remove)."
+                "Parameters: rule_name (string, the name of the rule to remove).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("rule_name") { put("type", "string"); put("description", "The name of the rule to remove") }
+                },
+                required = listOf("rule_name")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()

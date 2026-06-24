@@ -4,35 +4,51 @@ import com.burpmcp.ultra.bridge.BridgeFactory
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.StateManager
 import io.modelcontextprotocol.kotlin.sdk.server.Server
+import io.modelcontextprotocol.kotlin.sdk.types.ReadResourceResult
+import io.modelcontextprotocol.kotlin.sdk.types.TextResourceContents
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 /**
- * Central registry that wires all 14 MCP resources onto an MCP [Server].
+ * Central registry that wires the MCP resources onto an MCP [Server].
  *
  * MCP resources provide read-only, URI-addressed access to Burp Suite data.
- * Some resources are subscribable, meaning clients can receive notifications
- * when the underlying data changes.
+ * Each resource is **static / read-on-demand**: reading it invokes the backing
+ * bridge method and returns a current snapshot as JSON text.
  *
- * Resources:
+ * The MCP SDK 0.8.3 also supports subscribable resources (push updates), but
+ * those are intentionally NOT implemented here — the "live" variants would be
+ * true subscriptions backed by the EventBus and are out of scope. Clients that
+ * want a current view simply read the static resource again.
  *
- *   Static (read on demand):
- *   - burp://proxy/history           - Full proxy history
- *   - burp://proxy/websocket/history - WebSocket message history
- *   - burp://scanner/issues          - All scanner-reported issues
- *   - burp://sitemap                 - Site map tree
- *   - burp://scope                   - Current target scope
+ * Registered resources (all `application/json`):
+ *   - burp://proxy/history           - Recent proxy history (metadata page)
+ *   - burp://proxy/websocket/history - Proxy WebSocket message history
+ *   - burp://scanner/issues          - All scanner-reported audit issues
+ *   - burp://sitemap                 - Site map entries
+ *   - burp://scope                   - Current target scope configuration
  *   - burp://config/project          - Project-level configuration
  *   - burp://config/user             - User-level configuration
  *   - burp://organizer/items         - Organizer note items
- *
- *   Subscribable (push updates on change):
- *   - burp://proxy/history/live      - New proxy history entries
- *   - burp://proxy/websocket/live    - New WebSocket messages
- *   - burp://scanner/issues/live     - Newly reported scanner issues
- *   - burp://scope/live              - Scope changes
- *   - burp://collaborator/interactions - New Collaborator interactions
- *   - burp://events                  - All extension events
  */
 object ResourceRegistry {
+
+    private const val JSON_MIME = "application/json"
+
+    /** Default page size for the proxy history snapshot resource. */
+    private const val PROXY_HISTORY_COUNT = 100
+
+    /** Default page size for the proxy WebSocket history snapshot resource. */
+    private const val WEBSOCKET_HISTORY_COUNT = 100
+
+    /** Cap on the number of scanner issues returned by the issues resource. */
+    private const val SCANNER_ISSUES_CAP = 500
+
+    /** Cap on the number of site map entries returned by the sitemap resource. */
+    private const val SITEMAP_MAX_RESULTS = 500
+
+    /** Cap on the number of organizer items returned. */
+    private const val ORGANIZER_MAX_RESULTS = 200
 
     /**
      * Registers all MCP resources on the given [server].
@@ -45,62 +61,179 @@ object ResourceRegistry {
         stateManager: StateManager
     ) {
         // ---------------------------------------------------------------
-        // Static resources (read on demand)
-        // ---------------------------------------------------------------
-
         // burp://proxy/history
-        // Returns the full proxy history as a JSON array of request/response pairs.
-        // Supports optional query parameters for filtering by host, status, method.
+        // Recent proxy history as a JSON page (metadata-level: no full
+        // request/response bodies) so the snapshot stays token-friendly.
+        // ---------------------------------------------------------------
+        registerJsonResource(
+            server,
+            uri = "burp://proxy/history",
+            name = "Proxy History",
+            description = "Recent HTTP proxy history (metadata-level snapshot, most recent first)."
+        ) {
+            bridges.proxy.getHistory(
+                startIndex = 0,
+                count = PROXY_HISTORY_COUNT,
+                host = null,
+                method = null,
+                statusCode = null,
+                mimeType = null,
+                inScopeOnly = false,
+                includeRequest = false,
+                includeResponse = false,
+                statusCodeRange = null,
+                maxResponseLength = null
+            ).toString()
+        }
 
+        // ---------------------------------------------------------------
         // burp://proxy/websocket/history
-        // Returns all recorded WebSocket messages across all connections.
+        // Proxy WebSocket message history snapshot.
+        // ---------------------------------------------------------------
+        registerJsonResource(
+            server,
+            uri = "burp://proxy/websocket/history",
+            name = "Proxy WebSocket History",
+            description = "Recorded WebSocket messages captured by the proxy."
+        ) {
+            bridges.proxy.getWebSocketHistory(
+                startIndex = 0,
+                count = WEBSOCKET_HISTORY_COUNT,
+                host = null,
+                direction = null
+            ).toString()
+        }
 
+        // ---------------------------------------------------------------
         // burp://scanner/issues
-        // Returns all scanner-reported audit issues with severity, confidence,
-        // affected URLs, and remediation details.
+        // All scanner-reported audit issues (capped).
+        // ---------------------------------------------------------------
+        registerJsonResource(
+            server,
+            uri = "burp://scanner/issues",
+            name = "Scanner Issues",
+            description = "All scanner-reported audit issues with severity, confidence and affected URLs."
+        ) {
+            bridges.scanner.getAllIssues(null, null, null, SCANNER_ISSUES_CAP).toString()
+        }
 
+        // ---------------------------------------------------------------
         // burp://sitemap
-        // Returns the hierarchical site map tree with request/response data.
+        // Site map entries (metadata-level: no full request/response bodies).
+        // ---------------------------------------------------------------
+        registerJsonResource(
+            server,
+            uri = "burp://sitemap",
+            name = "Site Map",
+            description = "Site map entries (URL, method, status, content type)."
+        ) {
+            bridges.sitemap.query(
+                urlPrefix = null,
+                searchPattern = null,
+                maxResults = SITEMAP_MAX_RESULTS,
+                includeRequest = false,
+                includeResponse = false
+            ).toString()
+        }
 
+        // ---------------------------------------------------------------
         // burp://scope
-        // Returns the current target scope as include/exclude URL patterns.
+        // Current target scope configuration.
+        // ---------------------------------------------------------------
+        registerJsonResource(
+            server,
+            uri = "burp://scope",
+            name = "Target Scope",
+            description = "Current target scope configuration (include/exclude rules)."
+        ) {
+            bridges.scope.getConfig().toString()
+        }
 
+        // ---------------------------------------------------------------
         // burp://config/project
-        // Returns the current project-level configuration as JSON.
+        // Project-level configuration (full export).
+        // ---------------------------------------------------------------
+        registerJsonResource(
+            server,
+            uri = "burp://config/project",
+            name = "Project Configuration",
+            description = "Project-level Burp Suite configuration exported as JSON."
+        ) {
+            // exportProjectConfig returns a raw JSON string of all project options.
+            bridges.burpSuite.exportProjectConfig(emptyList())
+        }
 
+        // ---------------------------------------------------------------
         // burp://config/user
-        // Returns the current user-level configuration as JSON.
+        // User-level configuration (full export).
+        // ---------------------------------------------------------------
+        registerJsonResource(
+            server,
+            uri = "burp://config/user",
+            name = "User Configuration",
+            description = "User-level Burp Suite configuration exported as JSON."
+        ) {
+            // exportUserConfig returns a raw JSON string of all user options.
+            bridges.burpSuite.exportUserConfig(emptyList())
+        }
 
+        // ---------------------------------------------------------------
         // burp://organizer/items
-        // Returns all organizer note items.
-
+        // Organizer note items.
         // ---------------------------------------------------------------
-        // Subscribable resources (push updates on change)
-        // ---------------------------------------------------------------
+        registerJsonResource(
+            server,
+            uri = "burp://organizer/items",
+            name = "Organizer Items",
+            description = "Items stored in Burp Suite's Organizer (bookmarked requests/notes)."
+        ) {
+            bridges.organizer.getItems(null, ORGANIZER_MAX_RESULTS).toString()
+        }
+    }
 
-        // burp://proxy/history/live
-        // Subscribable resource that emits new proxy history entries as they
-        // are captured. Backed by EventBus "proxy.request" / "proxy.response" events.
+    /**
+     * Registers a single read-on-demand JSON resource.
+     *
+     * The [produce] lambda is invoked on each read and must return a JSON
+     * string. Any exception it throws is caught and converted into a small
+     * JSON error payload so that one failing resource never breaks the read
+     * (and never propagates an exception back through the SDK transport).
+     *
+     * The SDK signature confirmed via javap is:
+     *   addResource(uri, name, description, mimeType, readHandler)
+     * where readHandler is a suspend (ReadResourceRequest) -> ReadResourceResult.
+     */
+    private fun registerJsonResource(
+        server: Server,
+        uri: String,
+        name: String,
+        description: String,
+        produce: () -> String
+    ) {
+        server.addResource(
+            uri = uri,
+            name = name,
+            description = description,
+            mimeType = JSON_MIME
+        ) { request ->
+            val text = try {
+                produce()
+            } catch (e: Exception) {
+                buildJsonObject {
+                    put("error", "Failed to read resource $uri")
+                    put("message", e.message ?: e.javaClass.simpleName)
+                }.toString()
+            }
 
-        // burp://proxy/websocket/live
-        // Subscribable resource that emits new WebSocket messages as they flow
-        // through the proxy. Backed by EventBus "websocket.message" events.
-
-        // burp://scanner/issues/live
-        // Subscribable resource that emits newly reported scanner issues.
-        // Backed by EventBus "scanner.issue" events.
-
-        // burp://scope/live
-        // Subscribable resource that emits scope change notifications.
-        // Backed by EventBus "scope.changed" events.
-
-        // burp://collaborator/interactions
-        // Subscribable resource that emits new Collaborator interactions
-        // (DNS, HTTP, SMTP) as they arrive.
-        // Backed by EventBus "collaborator.interaction" events.
-
-        // burp://events
-        // Subscribable wildcard resource that emits all extension events.
-        // Useful for debugging and comprehensive monitoring.
+            ReadResourceResult(
+                contents = listOf(
+                    TextResourceContents(
+                        text = text,
+                        uri = request.uri,
+                        mimeType = JSON_MIME
+                    )
+                )
+            )
+        }
     }
 }

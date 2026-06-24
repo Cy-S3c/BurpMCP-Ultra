@@ -3,6 +3,7 @@ package com.burpmcp.ultra.tools.intruder
 import com.burpmcp.ultra.bridge.IntruderBridge
 import com.burpmcp.ultra.state.StateManager
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
@@ -16,7 +17,17 @@ object IntruderTools {
             description = "Send an HTTP request to Burp Suite's Intruder tool for automated attack " +
                 "configuration. Creates a new Intruder tab with the specified request. " +
                 "Parameters: request (raw HTTP request string), host (target hostname), " +
-                "port (target port), use_tls (boolean), tab_name (optional tab name)."
+                "port (target port), use_tls (boolean), tab_name (optional tab name).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("request") { put("type", "string"); put("description", "Raw HTTP request string") }
+                    putJsonObject("host") { put("type", "string"); put("description", "Target hostname") }
+                    putJsonObject("port") { put("type", "integer"); put("description", "Target port") }
+                    putJsonObject("use_tls") { put("type", "boolean"); put("description", "Whether to use TLS, default false") }
+                    putJsonObject("tab_name") { put("type", "string"); put("description", "Optional Intruder tab name") }
+                },
+                required = listOf("request", "host", "port")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -54,7 +65,22 @@ object IntruderTools {
                 "point positions. Each position is a [start, end] byte offset pair marking " +
                 "where payloads should be inserted. Parameters: request (raw HTTP request), " +
                 "host (target hostname), port (target port), use_tls (boolean), " +
-                "positions (array of [start, end] pairs), tab_name (optional tab name)."
+                "positions (array of [start, end] pairs), tab_name (optional tab name).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("request") { put("type", "string"); put("description", "Raw HTTP request string") }
+                    putJsonObject("host") { put("type", "string"); put("description", "Target hostname") }
+                    putJsonObject("port") { put("type", "integer"); put("description", "Target port") }
+                    putJsonObject("use_tls") { put("type", "boolean"); put("description", "Whether to use TLS, default false") }
+                    putJsonObject("positions") {
+                        put("type", "array")
+                        put("description", "Array of [start, end] byte offset pairs marking payload insertion points")
+                        putJsonObject("items") { put("type", "array") }
+                    }
+                    putJsonObject("tab_name") { put("type", "string"); put("description", "Optional Intruder tab name") }
+                },
+                required = listOf("request", "host", "port", "positions")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -121,7 +147,18 @@ object IntruderTools {
                 "name), transform_type (one of the supported types), prefix_value (string to " +
                 "prepend, for prefix type), suffix_value (string to append, for suffix type), " +
                 "regex_pattern (regex pattern, for regex_replace type), regex_replacement " +
-                "(replacement string, for regex_replace type)."
+                "(replacement string, for regex_replace type).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("name") { put("type", "string"); put("description", "Processor name") }
+                    putJsonObject("transform_type") { put("type", "string"); put("description", "One of: encode_base64, encode_url, hash_md5, hash_sha1, hash_sha256, prefix, suffix, regex_replace") }
+                    putJsonObject("prefix_value") { put("type", "string"); put("description", "String to prepend, for prefix type") }
+                    putJsonObject("suffix_value") { put("type", "string"); put("description", "String to append, for suffix type") }
+                    putJsonObject("regex_pattern") { put("type", "string"); put("description", "Regex pattern, for regex_replace type") }
+                    putJsonObject("regex_replacement") { put("type", "string"); put("description", "Replacement string, for regex_replace type") }
+                },
+                required = listOf("name", "transform_type")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()

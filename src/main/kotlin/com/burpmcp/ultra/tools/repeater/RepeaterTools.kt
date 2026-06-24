@@ -3,6 +3,7 @@ package com.burpmcp.ultra.tools.repeater
 import com.burpmcp.ultra.bridge.RepeaterBridge
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
 
@@ -15,7 +16,17 @@ object RepeaterTools {
                 "Creates a new Repeater tab with the specified request, allowing manual " +
                 "replay and modification. Parameters: request (raw HTTP request string), " +
                 "host (target hostname), port (target port number), use_tls (boolean, " +
-                "whether to use HTTPS), tab_name (optional, name for the Repeater tab)."
+                "whether to use HTTPS), tab_name (optional, name for the Repeater tab).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("request") { put("type", "string"); put("description", "Raw HTTP request string") }
+                    putJsonObject("host") { put("type", "string"); put("description", "Target hostname") }
+                    putJsonObject("port") { put("type", "integer"); put("description", "Target port number") }
+                    putJsonObject("use_tls") { put("type", "boolean"); put("description", "Whether to use HTTPS (TLS)") }
+                    putJsonObject("tab_name") { put("type", "string"); put("description", "Optional name for the Repeater tab") }
+                },
+                required = listOf("request", "host", "port")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()

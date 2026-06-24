@@ -21,6 +21,7 @@ import burp.api.montoya.http.message.responses.HttpResponse
 import burp.api.montoya.http.HttpService
 import burp.api.montoya.sitemap.SiteMapFilter
 import burp.api.montoya.core.ByteArray as BurpByteArray
+import burp.api.montoya.core.Registration
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.ScanTask
 import com.burpmcp.ultra.state.StateManager
@@ -462,15 +463,28 @@ class ScannerBridge(
                 else -> burp.api.montoya.scanner.ReportFormat.HTML
             }
 
-            val outputFile = java.io.File(outputPath)
-            outputFile.parentFile?.mkdirs()
+            // Confine writes to a reports directory. Without this, an attacker-
+            // controlled (or prompt-injected) outputPath is an arbitrary file-write
+            // primitive (e.g. ~/.bashrc, autostart entries). Absolute paths outside
+            // the base and ".." traversal are rejected; everything else resolves
+            // under <user.home>/.burpmcp-ultra/reports/.
+            val baseDir = java.io.File(System.getProperty("user.home"), ".burpmcp-ultra/reports").canonicalFile
+            baseDir.mkdirs()
+            val requested = java.io.File(outputPath)
+            val target = (if (requested.isAbsolute) requested else java.io.File(baseDir, outputPath)).canonicalFile
+            if (target.path != baseDir.path && !target.path.startsWith(baseDir.path + java.io.File.separator)) {
+                return buildJsonObject {
+                    put("error", "output_path escapes the allowed reports directory ($baseDir): $outputPath")
+                }
+            }
+            target.parentFile?.mkdirs()
 
-            api.scanner().generateReport(filteredIssues, reportFormat, outputFile.toPath())
+            api.scanner().generateReport(filteredIssues, reportFormat, target.toPath())
 
             buildJsonObject {
                 put("report_generated", true)
                 put("format", format.uppercase())
-                put("output_path", outputPath)
+                put("output_path", target.path)
                 put("issue_count", filteredIssues.size)
             }
         } catch (e: UnsupportedOperationException) {
@@ -563,10 +577,22 @@ class ScannerBridge(
      */
     fun importBCheck(script: String): JsonObject {
         return try {
-            api.scanner().bChecks().importBCheck(script)
-            buildJsonObject {
-                put("imported", true)
-                put("script_length", script.length)
+            val result = api.scanner().bChecks().importBCheck(script)
+            when (result.status()) {
+                burp.api.montoya.scanner.bchecks.BCheckImportResult.Status.LOADED_WITHOUT_ERRORS ->
+                    buildJsonObject {
+                        put("imported", true)
+                        put("script_length", script.length)
+                    }
+                else ->
+                    // LOADED_WITH_ERRORS: Burp parsed the script but rejected it.
+                    // Report the import errors instead of a fake success.
+                    buildJsonObject {
+                        put("imported", false)
+                        put("status", "error")
+                        put("errors", buildJsonArray { result.importErrors().forEach { add(it) } })
+                        put("hint", "Fix the reported BCheck errors and re-import.")
+                    }
             }
         } catch (e: UnsupportedOperationException) {
             buildJsonObject {
@@ -734,8 +760,13 @@ class ScannerBridge(
                 }
             }
 
-            api.scanner().registerScanCheck(scanCheck)
+            val registration: Registration = api.scanner().registerScanCheck(scanCheck)
             stateManager.registeredScanChecks.add(checkName)
+            // Retain the Registration so the check can be deregistered later
+            // (via unregisterScanCheck or on extension unload). Previously this
+            // handle was discarded, leaking the check with no way to remove it.
+            stateManager.scanCheckRegistrations.put(checkName, registration)
+                ?.let { previous -> try { previous.deregister() } catch (_: Exception) {} }
 
             buildJsonObject {
                 put("registered", true)
@@ -750,6 +781,35 @@ class ScannerBridge(
         } catch (e: Exception) {
             buildJsonObject {
                 put("error", "Failed to register scan check: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Deregisters a scan check previously registered via [registerScanCheck].
+     *
+     * Uses the retained Montoya [Registration] handle to remove the check
+     * from Burp's scanner, then drops it from internal tracking.
+     *
+     * @param checkName The name used when the check was registered.
+     * @return JSON object confirming removal or reporting an error.
+     */
+    fun unregisterScanCheck(checkName: String): JsonObject {
+        val registration = stateManager.scanCheckRegistrations[checkName]
+            ?: return buildJsonObject { put("error", "Scan check not found: $checkName") }
+
+        return try {
+            registration.deregister()
+            stateManager.scanCheckRegistrations.remove(checkName)
+            stateManager.registeredScanChecks.remove(checkName)
+            buildJsonObject {
+                put("check_name", checkName)
+                put("unregistered", true)
+            }
+        } catch (e: Exception) {
+            buildJsonObject {
+                put("check_name", checkName)
+                put("error", "Failed to unregister scan check: ${e.message}")
             }
         }
     }

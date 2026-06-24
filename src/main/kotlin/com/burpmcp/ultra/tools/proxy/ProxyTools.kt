@@ -4,6 +4,7 @@ import com.burpmcp.ultra.bridge.ProxyBridge
 import com.burpmcp.ultra.state.ProxyRule
 import com.burpmcp.ultra.state.StateManager
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
@@ -24,7 +25,23 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_history",
-            description = "Get HTTP proxy history entries with optional filtering by host, method, status code, status code range, MIME type. Returns request/response metadata and optionally full request/response text."
+            description = "Get HTTP proxy history entries with optional filtering by host, method, status code, status code range, MIME type. Returns request/response metadata and optionally full request/response text.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("start_index") { put("type", "integer"); put("description", "Start index of history entries (default 0)") }
+                    putJsonObject("count") { put("type", "integer"); put("description", "Maximum number of entries to return (default 100)") }
+                    putJsonObject("host") { put("type", "string"); put("description", "Filter by host") }
+                    putJsonObject("method") { put("type", "string"); put("description", "Filter by HTTP method") }
+                    putJsonObject("status_code") { put("type", "integer"); put("description", "Filter by exact status code") }
+                    putJsonObject("status_code_range") { put("type", "string"); put("description", "Filter by status code range") }
+                    putJsonObject("mime_type") { put("type", "string"); put("description", "Filter by MIME type") }
+                    putJsonObject("include_request") { put("type", "boolean"); put("description", "Include full request text (default false)") }
+                    putJsonObject("include_response") { put("type", "boolean"); put("description", "Include full response text (default false)") }
+                    putJsonObject("in_scope_only") { put("type", "boolean"); put("description", "Restrict to in-scope items (default false)") }
+                    putJsonObject("max_response_length") { put("type", "integer"); put("description", "Truncate response text to this length") }
+                },
+                required = emptyList()
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -60,7 +77,20 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_history_search",
-            description = "Search proxy history using a regex pattern. Can search in request, response, or both. Returns matching history entries."
+            description = "Search proxy history using a regex pattern. Can search in request, response, or both. Returns matching history entries.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("pattern") { put("type", "string"); put("description", "Regex pattern to search for") }
+                    putJsonObject("search_in") { put("type", "string"); put("description", "Where to search: 'request', 'response', or 'both' (default 'both')") }
+                    putJsonObject("case_sensitive") { put("type", "boolean"); put("description", "Case-sensitive matching (default false)") }
+                    putJsonObject("max_results") { put("type", "integer"); put("description", "Maximum number of results (default 100)") }
+                    putJsonObject("in_scope_only") { put("type", "boolean"); put("description", "Restrict to in-scope items (default false)") }
+                    putJsonObject("include_request") { put("type", "boolean"); put("description", "Include full request text (default false)") }
+                    putJsonObject("include_response") { put("type", "boolean"); put("description", "Include full response text (default false)") }
+                    putJsonObject("max_response_length") { put("type", "integer"); put("description", "Truncate response text to this length") }
+                },
+                required = listOf("pattern")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -101,7 +131,16 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_websocket_history",
-            description = "Get WebSocket proxy history entries with optional filtering by host and direction (CLIENT_TO_SERVER or SERVER_TO_CLIENT)."
+            description = "Get WebSocket proxy history entries with optional filtering by host and direction (CLIENT_TO_SERVER or SERVER_TO_CLIENT).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("start_index") { put("type", "integer"); put("description", "Start index of history entries (default 0)") }
+                    putJsonObject("count") { put("type", "integer"); put("description", "Maximum number of entries to return (default 100)") }
+                    putJsonObject("host") { put("type", "string"); put("description", "Filter by host") }
+                    putJsonObject("direction") { put("type", "string"); put("description", "Filter by direction (CLIENT_TO_SERVER or SERVER_TO_CLIENT)") }
+                },
+                required = emptyList()
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -127,7 +166,15 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_websocket_history_search",
-            description = "Search WebSocket proxy history using a regex pattern on message payloads. Can filter by direction."
+            description = "Search WebSocket proxy history using a regex pattern on message payloads. Can filter by direction.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("pattern") { put("type", "string"); put("description", "Regex pattern to search message payloads") }
+                    putJsonObject("direction") { put("type", "string"); put("description", "Filter by direction (CLIENT_TO_SERVER or SERVER_TO_CLIENT)") }
+                    putJsonObject("max_results") { put("type", "integer"); put("description", "Maximum number of results (default 100)") }
+                },
+                required = listOf("pattern")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -160,7 +207,8 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_intercept_enable",
-            description = "Enable proxy interception. When enabled, requests/responses will be held for review before forwarding."
+            description = "Enable proxy interception. When enabled, requests/responses will be held for review before forwarding.",
+            inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList())
         ) { _ ->
             try {
                 val result = bridge.enableIntercept()
@@ -180,7 +228,8 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_intercept_disable",
-            description = "Disable proxy interception. Requests/responses will pass through without being held."
+            description = "Disable proxy interception. Requests/responses will pass through without being held.",
+            inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList())
         ) { _ ->
             try {
                 val result = bridge.disableIntercept()
@@ -200,7 +249,8 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_intercept_status",
-            description = "Get the current proxy interception state (enabled or disabled)."
+            description = "Get the current proxy interception state (enabled or disabled).",
+            inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList())
         ) { _ ->
             try {
                 val result = bridge.isInterceptEnabled()
@@ -220,7 +270,15 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_annotate",
-            description = "Annotate a proxy history item by setting a comment and/or highlight color. Highlight colors: NONE, RED, ORANGE, YELLOW, GREEN, CYAN, BLUE, PINK, MAGENTA, GRAY."
+            description = "Annotate a proxy history item by setting a comment and/or highlight color. Highlight colors: NONE, RED, ORANGE, YELLOW, GREEN, CYAN, BLUE, PINK, MAGENTA, GRAY.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("index") { put("type", "integer"); put("description", "Proxy history item ID") }
+                    putJsonObject("comment") { put("type", "string"); put("description", "Comment to set on the item") }
+                    putJsonObject("highlight") { put("type", "string"); put("description", "Highlight color (NONE, RED, ORANGE, YELLOW, GREEN, CYAN, BLUE, PINK, MAGENTA, GRAY)") }
+                },
+                required = listOf("index")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -253,7 +311,27 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_set_request_rule",
-            description = "Set a proxy request interception rule. Rules can match on host, URL, method, header, or body patterns and perform actions: 'modify' (add/remove/replace headers, body regex replacement), 'drop' (silently drop the request), or 'tag' (annotate in proxy history). If rule_id matches an existing rule, it is replaced."
+            description = "Set a proxy request interception rule. Rules can match on host, URL, method, header, or body patterns and perform actions: 'modify' (add/remove/replace headers, body regex replacement), 'drop' (silently drop the request), or 'tag' (annotate in proxy history). If rule_id matches an existing rule, it is replaced.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("rule_id") { put("type", "string"); put("description", "Rule ID; auto-generated if omitted") }
+                    putJsonObject("action") { put("type", "string"); put("description", "Action: 'modify', 'drop', or 'tag'") }
+                    putJsonObject("match_host") { put("type", "string"); put("description", "Regex to match against host") }
+                    putJsonObject("match_url") { put("type", "string"); put("description", "Regex to match against URL") }
+                    putJsonObject("match_method") { put("type", "string"); put("description", "Regex to match against HTTP method") }
+                    putJsonObject("match_header") { put("type", "string"); put("description", "Regex to match against headers") }
+                    putJsonObject("match_body") { put("type", "string"); put("description", "Regex to match against body") }
+                    putJsonObject("modify_add_header") { put("type", "string"); put("description", "Header to add when action is 'modify'") }
+                    putJsonObject("modify_remove_header") { put("type", "string"); put("description", "Header to remove when action is 'modify'") }
+                    putJsonObject("modify_replace_header") { put("type", "object"); put("description", "Map of header names to replacement values") }
+                    putJsonObject("modify_body_regex") { put("type", "string"); put("description", "Regex for body replacement") }
+                    putJsonObject("modify_body_replacement") { put("type", "string"); put("description", "Replacement for body regex matches") }
+                    putJsonObject("tag_comment") { put("type", "string"); put("description", "Comment to attach when action is 'tag'") }
+                    putJsonObject("tag_highlight") { put("type", "string"); put("description", "Highlight color when action is 'tag'") }
+                    putJsonObject("enabled") { put("type", "boolean"); put("description", "Whether the rule is active (default true)") }
+                },
+                required = listOf("action")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -319,7 +397,27 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_set_response_rule",
-            description = "Set a proxy response interception rule. Rules can match on host, URL, status code, header, or body patterns and perform actions: 'modify' (add/remove/replace headers, body regex replacement), 'drop' (silently drop the response), or 'tag' (annotate in proxy history). If rule_id matches an existing rule, it is replaced."
+            description = "Set a proxy response interception rule. Rules can match on host, URL, status code, header, or body patterns and perform actions: 'modify' (add/remove/replace headers, body regex replacement), 'drop' (silently drop the response), or 'tag' (annotate in proxy history). If rule_id matches an existing rule, it is replaced.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("rule_id") { put("type", "string"); put("description", "Rule ID; auto-generated if omitted") }
+                    putJsonObject("action") { put("type", "string"); put("description", "Action: 'modify', 'drop', or 'tag'") }
+                    putJsonObject("match_host") { put("type", "string"); put("description", "Regex to match against host") }
+                    putJsonObject("match_url") { put("type", "string"); put("description", "Regex to match against URL") }
+                    putJsonObject("match_header") { put("type", "string"); put("description", "Regex to match against headers") }
+                    putJsonObject("match_body") { put("type", "string"); put("description", "Regex to match against body") }
+                    putJsonObject("match_status") { put("type", "integer"); put("description", "Status code to match") }
+                    putJsonObject("modify_add_header") { put("type", "string"); put("description", "Header to add when action is 'modify'") }
+                    putJsonObject("modify_remove_header") { put("type", "string"); put("description", "Header to remove when action is 'modify'") }
+                    putJsonObject("modify_replace_header") { put("type", "object"); put("description", "Map of header names to replacement values") }
+                    putJsonObject("modify_body_regex") { put("type", "string"); put("description", "Regex for body replacement") }
+                    putJsonObject("modify_body_replacement") { put("type", "string"); put("description", "Replacement for body regex matches") }
+                    putJsonObject("tag_comment") { put("type", "string"); put("description", "Comment to attach when action is 'tag'") }
+                    putJsonObject("tag_highlight") { put("type", "string"); put("description", "Highlight color when action is 'tag'") }
+                    putJsonObject("enabled") { put("type", "boolean"); put("description", "Whether the rule is active (default true)") }
+                },
+                required = listOf("action")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -385,7 +483,13 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_list_rules",
-            description = "List all proxy interception rules. Optionally filter by type ('request' or 'response')."
+            description = "List all proxy interception rules. Optionally filter by type ('request' or 'response').",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("type") { put("type", "string"); put("description", "Filter by rule type ('request' or 'response')") }
+                },
+                required = emptyList()
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -424,7 +528,13 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_remove_rule",
-            description = "Remove a proxy interception rule by its rule ID."
+            description = "Remove a proxy interception rule by its rule ID.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("rule_id") { put("type", "string"); put("description", "ID of the rule to remove") }
+                },
+                required = listOf("rule_id")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -459,7 +569,15 @@ object ProxyTools {
         // ---------------------------------------------------------------
         server.addTool(
             name = "proxy_auto_auth",
-            description = "Convenience tool: auto-inject an authentication header into all proxy requests matching a host pattern. Creates a proxy request rule that adds the specified header. Use proxy_remove_rule with the returned rule_id to remove it later. Parameters: header_name (default 'Authorization'), header_value (required), host_pattern (regex, default '.*' for all hosts)."
+            description = "Convenience tool: auto-inject an authentication header into all proxy requests matching a host pattern. Creates a proxy request rule that adds the specified header. Use proxy_remove_rule with the returned rule_id to remove it later. Parameters: header_name (default 'Authorization'), header_value (required), host_pattern (regex, default '.*' for all hosts).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("header_name") { put("type", "string"); put("description", "Header name to inject (default 'Authorization')") }
+                    putJsonObject("header_value") { put("type", "string"); put("description", "Header value to inject") }
+                    putJsonObject("host_pattern") { put("type", "string"); put("description", "Regex host pattern to match (default '.*' for all hosts)") }
+                },
+                required = listOf("header_value")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()

@@ -3,6 +3,7 @@ package com.burpmcp.ultra.tools.scancheck
 import com.burpmcp.ultra.bridge.ScanCheckBridge
 import com.burpmcp.ultra.core.asJsonObjectList
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
@@ -34,7 +35,19 @@ object ScanCheckTools {
                 "[matches, contains, equals], negate [true/false]), severity (required: high, medium, " +
                 "low, information), confidence (required: certain, firm, tentative), issue_detail " +
                 "(required, detailed issue description), issue_remediation (optional, how to fix). " +
-                "Use scancheck_templates first to see examples and the full condition reference."
+                "Use scancheck_templates first to see examples and the full condition reference.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("name") { put("type", "string"); put("description", "Check name") }
+                    putJsonObject("description") { put("type", "string"); put("description", "What the check detects") }
+                    putJsonObject("conditions") { put("type", "array"); putJsonObject("items") { put("type", "object") }; put("description", "Condition objects: location, pattern, condition_type, negate") }
+                    putJsonObject("severity") { put("type", "string"); put("description", "Severity: high, medium, low, information") }
+                    putJsonObject("confidence") { put("type", "string"); put("description", "Confidence: certain, firm, tentative") }
+                    putJsonObject("issue_detail") { put("type", "string"); put("description", "Detailed issue description") }
+                    putJsonObject("issue_remediation") { put("type", "string"); put("description", "How to fix the issue") }
+                },
+                required = listOf("name", "description", "conditions", "severity", "confidence", "issue_detail")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -123,7 +136,19 @@ object ScanCheckTools {
                 "stop_if_no_match [boolean, default true -- stop chain if conditions fail]), severity " +
                 "(required: high, medium, low, information), confidence (required: certain, firm, " +
                 "tentative), issue_detail (required, detailed issue description), issue_remediation " +
-                "(optional, how to fix). Use scancheck_templates first to see multi-step examples."
+                "(optional, how to fix). Use scancheck_templates first to see multi-step examples.",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("name") { put("type", "string"); put("description", "Check name") }
+                    putJsonObject("description") { put("type", "string"); put("description", "What the check detects") }
+                    putJsonObject("steps") { put("type", "array"); putJsonObject("items") { put("type", "object") }; put("description", "Step objects: payload, response_conditions[], stop_if_no_match") }
+                    putJsonObject("severity") { put("type", "string"); put("description", "Severity: high, medium, low, information") }
+                    putJsonObject("confidence") { put("type", "string"); put("description", "Confidence: certain, firm, tentative") }
+                    putJsonObject("issue_detail") { put("type", "string"); put("description", "Detailed issue description") }
+                    putJsonObject("issue_remediation") { put("type", "string"); put("description", "How to fix the issue") }
+                },
+                required = listOf("name", "description", "steps", "severity", "confidence", "issue_detail")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -208,7 +233,8 @@ object ScanCheckTools {
                 "exposure, missing security headers, error disclosure, SQL injection, SSTI, reflected " +
                 "XSS), plus a complete reference of condition locations, types, and active step fields. " +
                 "Call this BEFORE creating Script-mode checks to understand the capabilities and " +
-                "correct parameter structure. No parameters required."
+                "correct parameter structure. No parameters required.",
+            inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList())
         ) { _ ->
             try {
                 val result = bridge.getTemplates()
@@ -230,7 +256,8 @@ object ScanCheckTools {
             name = "scancheck_list",
             description = "List all Script-mode scan checks deployed via MCP. Returns the count and " +
                 "details of each deployed check including its ID, name, mode (passive/active), and " +
-                "deployment timestamp. No parameters required."
+                "deployment timestamp. No parameters required.",
+            inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList())
         ) { _ ->
             try {
                 val result = bridge.list()
@@ -253,7 +280,13 @@ object ScanCheckTools {
             description = "Remove a deployed Script-mode scan check by its ID. This fully deregisters " +
                 "the check from Burp's scanner -- unlike BCheck removal, Script-mode checks are " +
                 "completely removed at runtime. Parameters: id (required, the scan check ID returned " +
-                "by scancheck_create_passive or scancheck_create_active, e.g. 'scheck-001')."
+                "by scancheck_create_passive or scancheck_create_active, e.g. 'scheck-001').",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("id") { put("type", "string"); put("description", "Scan check ID to remove") }
+                },
+                required = listOf("id")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()

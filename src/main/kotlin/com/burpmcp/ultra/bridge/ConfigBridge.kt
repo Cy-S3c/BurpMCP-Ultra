@@ -67,6 +67,7 @@ class ConfigBridge(private val api: MontoyaApi) {
                 }
             }
 
+            val expectedCount = existingListeners.size + 1
             existingListeners.add(newListener)
             proxyObj["request_listeners"] = JsonArray(existingListeners)
             config["proxy"] = JsonObject(proxyObj)
@@ -74,11 +75,25 @@ class ConfigBridge(private val api: MontoyaApi) {
             val modifiedConfig = JsonObject(config).toString()
             api.burpSuite().importProjectOptionsFromJson(modifiedConfig)
 
+            // Read back the actual config: Burp silently ignores unrecognized
+            // keys, so confirm the listener was really added before reporting
+            // success.
+            val afterListeners = currentProxyListeners()
+            val present = afterListeners.any { listener ->
+                listener.jsonObject["listener_interface"]?.jsonPrimitive?.contentOrNull == listenerInterface
+            }
+            if (!present || afterListeners.size < expectedCount) {
+                return buildJsonObject {
+                    put("status", "failed")
+                    put("error", "Burp did not accept the config change (unrecognized schema?)")
+                }
+            }
+
             buildJsonObject {
                 put("status", "added")
                 put("interface", listenerInterface)
                 put("tls", tls)
-                put("total_listeners", existingListeners.size)
+                put("total_listeners", afterListeners.size)
             }
         } catch (e: Exception) {
             buildJsonObject {
@@ -118,10 +133,23 @@ class ConfigBridge(private val api: MontoyaApi) {
             val modifiedConfig = JsonObject(config).toString()
             api.burpSuite().importProjectOptionsFromJson(modifiedConfig)
 
+            // Read back the actual config and confirm the listener is gone;
+            // Burp silently ignores unrecognized keys.
+            val afterListeners = currentProxyListeners()
+            val stillPresent = afterListeners.any { listener ->
+                listener.jsonObject["listener_interface"]?.jsonPrimitive?.contentOrNull == listenerInterface
+            }
+            if (stillPresent) {
+                return buildJsonObject {
+                    put("status", "failed")
+                    put("error", "Burp did not accept the config change (unrecognized schema?)")
+                }
+            }
+
             buildJsonObject {
                 put("status", "removed")
                 put("interface", listenerInterface)
-                put("remaining_listeners", existingListeners.size)
+                put("remaining_listeners", afterListeners.size)
             }
         } catch (e: Exception) {
             buildJsonObject {
@@ -158,6 +186,7 @@ class ConfigBridge(private val api: MontoyaApi) {
                 put("is_regex", false)
             }
 
+            val expectedCount = existingRules.size + 1
             existingRules.add(newRule)
             proxyObj["match_replace_rules"] = JsonArray(existingRules)
             config["proxy"] = JsonObject(proxyObj)
@@ -165,13 +194,29 @@ class ConfigBridge(private val api: MontoyaApi) {
             val modifiedConfig = JsonObject(config).toString()
             api.burpSuite().importProjectOptionsFromJson(modifiedConfig)
 
+            // Read back the actual config: Burp silently ignores unrecognized
+            // keys, so confirm the rule was really added before reporting
+            // success.
+            val afterRules = currentMatchReplaceRules()
+            val present = afterRules.any { rule ->
+                val r = rule.jsonObject
+                r["match"]?.jsonPrimitive?.contentOrNull == match &&
+                    r["replace"]?.jsonPrimitive?.contentOrNull == replace
+            }
+            if (!present || afterRules.size < expectedCount) {
+                return buildJsonObject {
+                    put("status", "failed")
+                    put("error", "Burp did not accept the config change (unrecognized schema?)")
+                }
+            }
+
             buildJsonObject {
                 put("status", "added")
                 put("type", type)
                 put("match", match)
                 put("replace", replace)
                 put("enabled", enabled)
-                put("total_rules", existingRules.size)
+                put("total_rules", afterRules.size)
             }
         } catch (e: Exception) {
             buildJsonObject {
@@ -230,6 +275,7 @@ class ConfigBridge(private val api: MontoyaApi) {
                 }
             }
 
+            val expectedCount = existingRules.size - 1
             val removed = existingRules.removeAt(index)
             proxyObj["match_replace_rules"] = JsonArray(existingRules)
             config["proxy"] = JsonObject(proxyObj)
@@ -237,11 +283,21 @@ class ConfigBridge(private val api: MontoyaApi) {
             val modifiedConfig = JsonObject(config).toString()
             api.burpSuite().importProjectOptionsFromJson(modifiedConfig)
 
+            // Read back the actual config and confirm the rule count dropped;
+            // Burp silently ignores unrecognized keys.
+            val afterRules = currentMatchReplaceRules()
+            if (afterRules.size > expectedCount) {
+                return buildJsonObject {
+                    put("status", "failed")
+                    put("error", "Burp did not accept the config change (unrecognized schema?)")
+                }
+            }
+
             buildJsonObject {
                 put("status", "removed")
                 put("removed_index", index)
                 put("removed_rule", removed)
-                put("remaining_rules", existingRules.size)
+                put("remaining_rules", afterRules.size)
             }
         } catch (e: Exception) {
             buildJsonObject {
@@ -285,6 +341,22 @@ class ConfigBridge(private val api: MontoyaApi) {
 
             api.burpSuite().importProjectOptionsFromJson(upstreamConfig.toString())
 
+            // Read back the actual config: Burp silently ignores unrecognized
+            // keys, so confirm the upstream proxy server is really present
+            // before reporting success.
+            val afterServers = currentUpstreamProxyServers()
+            val present = afterServers.any { server ->
+                val s = server.jsonObject
+                s["proxy_host"]?.jsonPrimitive?.contentOrNull == host &&
+                    s["proxy_port"]?.jsonPrimitive?.intOrNull == port
+            }
+            if (!present) {
+                return buildJsonObject {
+                    put("status", "failed")
+                    put("error", "Burp did not accept the config change (unrecognized schema?)")
+                }
+            }
+
             buildJsonObject {
                 put("status", "configured")
                 put("proxy_host", host)
@@ -298,5 +370,50 @@ class ConfigBridge(private val api: MontoyaApi) {
                 put("error", "Failed to set upstream proxy: ${e.message}")
             }
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Read-back helpers (re-export config to verify changes took effect)
+    // ---------------------------------------------------------------
+
+    /**
+     * Re-exports the current proxy request listeners from the live project
+     * config. Returns an empty list if the section is absent.
+     */
+    private fun currentProxyListeners(): List<JsonElement> {
+        val configJson = api.burpSuite().exportProjectOptionsAsJson("proxy.request_listeners")
+        val config = Json.parseToJsonElement(configJson)
+        return config.jsonObject["proxy"]
+            ?.jsonObject?.get("request_listeners")
+            ?.jsonArray ?: JsonArray(emptyList())
+    }
+
+    /**
+     * Re-exports the current match-and-replace rules from the live project
+     * config. Returns an empty list if the section is absent.
+     */
+    private fun currentMatchReplaceRules(): List<JsonElement> {
+        val configJson = api.burpSuite().exportProjectOptionsAsJson("proxy.match_replace_rules")
+        val config = Json.parseToJsonElement(configJson)
+        return config.jsonObject["proxy"]
+            ?.jsonObject?.get("match_replace_rules")
+            ?.jsonArray ?: JsonArray(emptyList())
+    }
+
+    /**
+     * Re-exports the current upstream proxy servers from the live project
+     * config. Returns an empty list if the section is absent.
+     */
+    private fun currentUpstreamProxyServers(): List<JsonElement> {
+        val configJson = api.burpSuite().exportProjectOptionsAsJson("project_options.connections.upstream_proxy")
+        val config = Json.parseToJsonElement(configJson)
+        // Tolerate both a flat "upstream_proxy" root and the nested
+        // project_options.connections.upstream_proxy layout.
+        val root = config.jsonObject
+        val upstream = root["upstream_proxy"]?.jsonObject
+            ?: root["project_options"]?.jsonObject
+                ?.get("connections")?.jsonObject
+                ?.get("upstream_proxy")?.jsonObject
+        return upstream?.get("servers")?.jsonArray ?: JsonArray(emptyList())
     }
 }

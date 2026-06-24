@@ -2,6 +2,7 @@ package com.burpmcp.ultra.tools.bambda
 
 import com.burpmcp.ultra.bridge.BambdaBridge
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
@@ -17,7 +18,13 @@ object BambdaTools {
                 "are Java-like lambda expressions used to customize Burp Suite's " +
                 "behavior, such as proxy history filters, HTTP match-and-replace " +
                 "rules, and custom column definitions. Parameters: script (required, " +
-                "the Bambda script content as a Java lambda expression string)."
+                "the Bambda script content as a Java lambda expression string).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("script") { put("type", "string"); put("description", "The Bambda script content as a Java lambda expression string") }
+                },
+                required = listOf("script")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()

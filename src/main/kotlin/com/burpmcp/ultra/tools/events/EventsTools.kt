@@ -3,6 +3,7 @@ package com.burpmcp.ultra.tools.events
 import com.burpmcp.ultra.events.BurpEvent
 import com.burpmcp.ultra.events.EventBus
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
@@ -18,7 +19,14 @@ object EventsTools {
                 "whose ID is strictly greater than since_id. Use the last event's ID as the cursor " +
                 "for subsequent polls. Parameters: since_id (number, return events after this ID; " +
                 "defaults to 0 for all events), max_events (number, maximum events to return; " +
-                "defaults to 200)."
+                "defaults to 200).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("since_id") { put("type", "integer"); put("description", "Return events after this ID (default 0)") }
+                    putJsonObject("max_events") { put("type", "integer"); put("description", "Maximum events to return (default 200)") }
+                },
+                required = emptyList()
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -48,7 +56,19 @@ object EventsTools {
             description = "Retrieve events from the event bus filtered by event type(s). Supports " +
                 "cursor-based polling. Parameters: types (array of strings, event types to filter " +
                 "e.g. ['proxy.request', 'scanner.issue']), since_id (number, return events after " +
-                "this ID; defaults to 0), max_events (number, maximum events to return; defaults to 200)."
+                "this ID; defaults to 0), max_events (number, maximum events to return; defaults to 200).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("types") {
+                        put("type", "array")
+                        put("description", "Event types to filter e.g. ['proxy.request', 'scanner.issue']")
+                        putJsonObject("items") { put("type", "string") }
+                    }
+                    putJsonObject("since_id") { put("type", "integer"); put("description", "Return events after this ID (default 0)") }
+                    putJsonObject("max_events") { put("type", "integer"); put("description", "Maximum events to return (default 200)") }
+                },
+                required = listOf("types")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -85,7 +105,17 @@ object EventsTools {
             description = "Subscribe to real-time event notifications from the event bus. When " +
                 "subscribed, matching events are buffered for retrieval. Returns a subscription " +
                 "ID for later unsubscription. Parameters: types (array of strings, event types " +
-                "to subscribe to; empty array subscribes to all events)."
+                "to subscribe to; empty array subscribes to all events).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("types") {
+                        put("type", "array")
+                        put("description", "Event types to subscribe to; empty array subscribes to all events")
+                        putJsonObject("items") { put("type", "string") }
+                    }
+                },
+                required = emptyList()
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -128,7 +158,13 @@ object EventsTools {
             name = "events_unsubscribe",
             description = "Unsubscribe from event bus notifications. Removes a previously created " +
                 "subscription by its ID. Parameters: subscription_id (string, the subscription " +
-                "ID returned by events_subscribe)."
+                "ID returned by events_subscribe).",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("subscription_id") { put("type", "string"); put("description", "Subscription ID returned by events_subscribe") }
+                },
+                required = listOf("subscription_id")
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
@@ -157,7 +193,8 @@ object EventsTools {
         server.addTool(
             name = "events_clear",
             description = "Clear all events from the event bus buffer and remove all subscriptions. " +
-                "Use with caution as this is irreversible. No parameters required."
+                "Use with caution as this is irreversible. No parameters required.",
+            inputSchema = ToolSchema(properties = buildJsonObject {}, required = emptyList())
         ) { _ ->
             try {
                 val sizeBefore = eventBus.size()

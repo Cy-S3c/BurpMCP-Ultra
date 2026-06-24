@@ -80,7 +80,22 @@ class BCheckBridge(
 
     private fun importScript(script: String, name: String, type: String): JsonObject {
         return try {
-            api.scanner().bChecks().importBCheck(script)
+            val result = api.scanner().bChecks().importBCheck(script)
+
+            // Burp returns a status even when the script is syntactically parseable
+            // but semantically invalid. Only treat LOADED_WITHOUT_ERRORS as success;
+            // otherwise the BCheck is NOT active and must not be recorded as deployed.
+            if (result.status() != burp.api.montoya.scanner.bchecks.BCheckImportResult.Status.LOADED_WITHOUT_ERRORS) {
+                return buildJsonObject {
+                    put("status", "error")
+                    put("imported", false)
+                    put("name", name)
+                    put("type", type)
+                    put("errors", buildJsonArray { result.importErrors().forEach { add(it) } })
+                    put("script", script)
+                    put("hint", "Check the BCheck syntax. Common issues: missing metadata, wrong scope keyword, invalid regex.")
+                }
+            }
 
             val id = stateManager.generateId("bcheck")
             deployedChecks.add(DeployedBCheck(

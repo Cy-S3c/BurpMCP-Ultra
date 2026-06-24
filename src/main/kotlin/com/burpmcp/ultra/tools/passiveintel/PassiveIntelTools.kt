@@ -3,6 +3,7 @@ package com.burpmcp.ultra.tools.passiveintel
 import com.burpmcp.ultra.bridge.PassiveIntelBridge
 import com.burpmcp.ultra.core.asStringList
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
+import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import kotlinx.serialization.json.*
@@ -15,7 +16,20 @@ object PassiveIntelTools {
 
 Parameters: max_items (int, default 1000), in_scope_only (bool, default false), categories (optional array of pattern names to check), host_filter (optional regex).
 
-Available categories: aws_access_key, aws_secret_key, google_api_key, github_token, slack_token, stripe_key, jwt_token, bearer_token, basic_auth, private_key, email_address, ipv4_internal, s3_bucket, azure_storage, gcs_bucket, internal_url, graphql_endpoint, api_endpoint, stack_trace, sql_error, debug_info, server_version, framework_version, php_version, sensitive_path"""
+Available categories: aws_access_key, aws_secret_key, google_api_key, github_token, slack_token, stripe_key, jwt_token, bearer_token, basic_auth, private_key, email_address, ipv4_internal, s3_bucket, azure_storage, gcs_bucket, internal_url, graphql_endpoint, api_endpoint, stack_trace, sql_error, debug_info, server_version, framework_version, php_version, sensitive_path""",
+            inputSchema = ToolSchema(
+                properties = buildJsonObject {
+                    putJsonObject("max_items") { put("type", "integer"); put("description", "Maximum proxy history items to scan, default 1000") }
+                    putJsonObject("in_scope_only") { put("type", "boolean"); put("description", "Only scan in-scope items, default false") }
+                    putJsonObject("categories") {
+                        put("type", "array")
+                        put("description", "Optional array of pattern names to check")
+                        putJsonObject("items") { put("type", "string") }
+                    }
+                    putJsonObject("host_filter") { put("type", "string"); put("description", "Optional regex to filter by host") }
+                },
+                required = emptyList()
+            )
         ) { request ->
             try {
                 val args = request.params.arguments ?: emptyMap()
