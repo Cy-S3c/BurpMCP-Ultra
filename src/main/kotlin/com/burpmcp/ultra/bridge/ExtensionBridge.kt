@@ -30,15 +30,17 @@ class ExtensionBridge(
                 put("filename", extension.filename() ?: "unknown")
                 put("is_bapp", extension.isBapp())
 
-                // MCP server info
+                // MCP server info. Both ports are plain MCP SSE transports; there is
+                // no Streamable HTTP or stdio transport (those were never implemented).
                 put("mcp", buildJsonObject {
-                    put("version", "2.0.1")
-                    put("sse_port", 9876)
-                    put("http_port", 9877)
+                    put("version", "2.1.0")
+                    put("sse_port_primary", 9876)
+                    put("sse_port_secondary", 9877)
+                    put("dashboard_port", 9878)
+                    put("auth_required", true)
                     put("transports", buildJsonArray {
-                        add("SSE")
-                        add("Streamable HTTP")
-                        add("stdio")
+                        add("SSE (primary)")
+                        add("SSE (secondary)")
                     })
                 })
 

@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.v0rt3x.burpmcp"
-version = "2.0.6"
+version = "2.1.0"
 
 // Pin the build to a JDK 17 toolchain on every OS (Windows / macOS / Linux).
 // Gradle auto-detects an installed JDK 17 and uses it to compile, regardless of

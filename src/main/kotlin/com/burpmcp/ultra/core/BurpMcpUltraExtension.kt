@@ -76,12 +76,12 @@ class BurpMcpUltraExtension : BurpExtension {
         // fake "Streamable HTTP"/"stdio" claims). uiTab.log() also writes to Burp's
         // output log, so one channel covers both surfaces.
         val (toolCount, resourceCount) = serverManager.registeredCounts()
-        uiTab.log("INFO", "System", "BurpMCP-Ultra v2.0.6 started")
+        uiTab.log("INFO", "System", "BurpMCP-Ultra v2.1.0 started")
         uiTab.log("INFO", "System", "SSE transport (primary):   http://127.0.0.1:9876/sse")
         uiTab.log("INFO", "System", "SSE transport (secondary): http://127.0.0.1:9877/sse")
         uiTab.log("INFO", "System", "Dashboard:                 http://127.0.0.1:9878")
         uiTab.log("INFO", "System", "Tools: $toolCount  |  MCP Resources: $resourceCount")
-        api.logging().raiseInfoEvent("BurpMCP-Ultra v2.0.6 started (SSE 9876/9877, dashboard 9878)")
+        api.logging().raiseInfoEvent("BurpMCP-Ultra v2.1.0 started (SSE 9876/9877, dashboard 9878)")
 
         // Do NOT log the auth token. uiTab.log() also writes to Burp's shared output
         // log, so logging the token would leak it into saved project files / screenshots.

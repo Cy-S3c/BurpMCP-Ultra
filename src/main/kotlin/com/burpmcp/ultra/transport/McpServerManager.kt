@@ -26,8 +26,9 @@ import kotlinx.coroutines.*
  * - **Primary SSE** on [ssePort] (default 9876).
  * - **Secondary SSE** on [httpPort] (default 9877).
  *
- * A third transport (stdio) is available but handled externally by the
- * process launcher, not by this manager.
+ * Both are plain MCP SSE transports (GET /sse + POST /message). There is no
+ * "Streamable HTTP" or "stdio" transport — those were previously advertised but
+ * never implemented.
  *
  * @param bridges All bridge instances for tool/resource registration.
  * @param eventBus Shared event bus for event-related tools/resources.
@@ -40,6 +41,7 @@ class McpServerManager(
     private val bridges: BridgeFactory.Bridges,
     private val eventBus: EventBus,
     private val stateManager: StateManager,
+    private val authToken: String,
     private val ssePort: Int = 9876,
     private val httpPort: Int = 9877,
     private val logging: Logging
@@ -57,7 +59,7 @@ class McpServerManager(
         val server = Server(
             serverInfo = Implementation(
                 name = "burpmcp-ultra",
-                version = "2.0.1"
+                version = "2.1.0"
             ),
             options = ServerOptions(
                 capabilities = ServerCapabilities(
@@ -70,11 +72,24 @@ class McpServerManager(
             )
         )
 
-        // Register all 137 tools and 14 resources on this server instance
+        // Register all tools and resources on this server instance
         ToolRegistry.registerAll(server, bridges, eventBus, stateManager)
         ResourceRegistry.registerAll(server, bridges, eventBus, stateManager)
 
+        // Wrap all tools to emit tool.called events for dashboard + native UI visibility
+        ToolCallTracker.wrapAll(server, eventBus, stateManager)
+
         return server
+    }
+
+    /**
+     * Returns the REAL number of (tools, resources) actually registered, by
+     * building a throwaway server and counting. Used for honest startup
+     * reporting instead of a hardcoded count that drifts as tools change.
+     */
+    fun registeredCounts(): Pair<Int, Int> {
+        val s = createMcpServer()
+        return s.tools.size to s.resources.size
     }
 
     /**
@@ -84,36 +99,21 @@ class McpServerManager(
     private fun serverFactory(): (ServerSSESession) -> Server = { _ -> createMcpServer() }
 
     /**
-     * Installs CORS on a Ktor [Application] so that browser-based MCP
-     * clients (and tools like MCP Inspector) can connect to the SSE
-     * endpoints.
-     */
-    private fun Application.installCors() {
-        install(CORS) {
-            allowMethod(HttpMethod.Options)
-            allowMethod(HttpMethod.Get)
-            allowMethod(HttpMethod.Post)
-            allowMethod(HttpMethod.Delete)
-            allowNonSimpleContentTypes = true
-            anyHost()
-        }
-    }
-
-    /**
      * Starts both transport servers asynchronously. Failures on one
      * transport do not prevent the other from starting.
      *
-     * Each server installs CORS for browser-based clients, then mounts
-     * the MCP SSE transport via [mcp]. The [mcp] extension auto-installs
-     * the Ktor SSE plugin and registers GET /sse (streaming) and
-     * POST /message (back-channel) endpoints.
+     * Each server is hardened via [installLocalhostSecurity] (Host-header
+     * allowlist + locked CORS + per-session token) before mounting the MCP
+     * SSE transport via [mcp]. The [mcp] extension auto-installs the Ktor SSE
+     * plugin and registers GET /sse (streaming) and POST /message (back-channel)
+     * endpoints. Both require the auth token.
      */
     fun start() {
         // Launch primary SSE transport
         scope.launch {
             try {
                 sseServer = embeddedServer(CIO, port = ssePort, host = "127.0.0.1") {
-                    installCors()
+                    installLocalhostSecurity(authToken, listOf(ssePort))
                     mcp(serverFactory())
                 }.also { it.start(wait = false) }
 
@@ -131,7 +131,7 @@ class McpServerManager(
         scope.launch {
             try {
                 httpServer = embeddedServer(CIO, port = httpPort, host = "127.0.0.1") {
-                    installCors()
+                    installLocalhostSecurity(authToken, listOf(httpPort))
                     mcp(serverFactory())
                 }.also { it.start(wait = false) }
 
