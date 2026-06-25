@@ -83,11 +83,9 @@ class SitemapBridge(private val api: MontoyaApi) {
             val targetSeverity = try {
                 AuditIssueSeverity.valueOf(severity.uppercase())
             } catch (_: IllegalArgumentException) {
-                null
+                throw IllegalArgumentException("Invalid severity '$severity'. Allowed: high, medium, low, information")
             }
-            if (targetSeverity != null) {
-                issues = issues.filter { it.severity() == targetSeverity }
-            }
+            issues = issues.filter { it.severity() == targetSeverity }
         }
 
         return buildJsonArray {
@@ -159,13 +157,13 @@ class SitemapBridge(private val api: MontoyaApi) {
         val issueSeverity = try {
             AuditIssueSeverity.valueOf(severity.uppercase())
         } catch (_: IllegalArgumentException) {
-            AuditIssueSeverity.INFORMATION
+            throw IllegalArgumentException("Invalid severity '$severity'. Allowed: high, medium, low, information")
         }
 
         val issueConfidence = try {
             AuditIssueConfidence.valueOf(confidence.uppercase())
         } catch (_: IllegalArgumentException) {
-            AuditIssueConfidence.TENTATIVE
+            throw IllegalArgumentException("Invalid confidence '$confidence'. Allowed: certain, firm, tentative")
         }
 
         val requestResponses = mutableListOf<HttpRequestResponse>()

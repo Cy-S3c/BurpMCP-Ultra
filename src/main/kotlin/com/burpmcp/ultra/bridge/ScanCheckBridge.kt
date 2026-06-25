@@ -10,6 +10,7 @@ import burp.api.montoya.scanner.audit.issues.AuditIssueConfidence
 import burp.api.montoya.scanner.audit.issues.AuditIssueSeverity
 import burp.api.montoya.http.message.HttpRequestResponse
 import burp.api.montoya.core.ByteArray as BurpByteArray
+import com.burpmcp.ultra.core.EnumValidation
 import burp.api.montoya.core.Registration
 import com.burpmcp.ultra.state.StateManager
 import kotlinx.serialization.json.*
@@ -81,6 +82,9 @@ class ScanCheckBridge(
         issueRemediation: String?
     ): JsonObject {
         return try {
+            EnumValidation.error(severity, VALID_SEVERITIES, "severity", required = true)?.let { return it }
+            EnumValidation.error(confidence, VALID_CONFIDENCES, "confidence", required = true)?.let { return it }
+            validateConditions(conditions, "conditions")?.let { return it }
             val auditSeverity = parseSeverity(severity)
             val auditConfidence = parseConfidence(confidence)
 
@@ -197,6 +201,12 @@ class ScanCheckBridge(
         issueRemediation: String?
     ): JsonObject {
         return try {
+            EnumValidation.error(severity, VALID_SEVERITIES, "severity", required = true)?.let { return it }
+            EnumValidation.error(confidence, VALID_CONFIDENCES, "confidence", required = true)?.let { return it }
+            steps.forEachIndexed { i, step ->
+                val rc = step["response_conditions"]?.jsonArray?.filterIsInstance<JsonObject>() ?: emptyList()
+                validateConditions(rc, "steps[$i].response_conditions")?.let { return it }
+            }
             val auditSeverity = parseSeverity(severity)
             val auditConfidence = parseConfidence(confidence)
 
@@ -624,5 +634,28 @@ class ScanCheckBridge(
             "tentative" -> AuditIssueConfidence.TENTATIVE
             else -> AuditIssueConfidence.TENTATIVE
         }
+    }
+
+    private val VALID_LOCATIONS = setOf(
+        "response_body", "response_headers", "status_code", "response_length",
+        "request_body", "request_headers", "request_url"
+    )
+    private val VALID_CONDITION_TYPES = setOf("contains", "equals", "matches")
+    private val VALID_SEVERITIES = setOf("high", "medium", "low", "information", "info")
+    private val VALID_CONFIDENCES = setOf("certain", "firm", "tentative")
+
+    /**
+     * Rejects scan-check conditions whose location/condition_type are not recognised, so a
+     * mistyped rule fails at registration instead of silently never firing (or, with negate,
+     * firing on every request). condition_type is optional (defaults to "matches").
+     */
+    private fun validateConditions(conditions: List<JsonObject>, prefix: String): JsonObject? {
+        conditions.forEachIndexed { i, c ->
+            val loc = c["location"]?.jsonPrimitive?.contentOrNull
+            EnumValidation.error(loc, VALID_LOCATIONS, "$prefix[$i].location", required = true)?.let { return it }
+            val ct = c["condition_type"]?.jsonPrimitive?.contentOrNull
+            EnumValidation.error(ct, VALID_CONDITION_TYPES, "$prefix[$i].condition_type")?.let { return it }
+        }
+        return null
     }
 }

@@ -221,13 +221,9 @@ class CollaboratorBridge(
                     "dns" -> InteractionType.DNS
                     "http" -> InteractionType.HTTP
                     "smtp" -> InteractionType.SMTP
-                    else -> null
+                    else -> throw IllegalArgumentException("Invalid type '$type'. Allowed: dns, http, smtp")
                 }
-                if (interactionType != null) {
-                    interactions.filter { it.type() == interactionType }
-                } else {
-                    interactions
-                }
+                interactions.filter { it.type() == interactionType }
             } else {
                 interactions
             }

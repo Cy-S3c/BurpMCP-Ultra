@@ -1,6 +1,7 @@
 package com.burpmcp.ultra.tools.proxy
 
 import com.burpmcp.ultra.bridge.ProxyBridge
+import com.burpmcp.ultra.core.EnumValidation
 import com.burpmcp.ultra.state.ProxyRule
 import com.burpmcp.ultra.state.StateManager
 import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
@@ -347,6 +348,10 @@ object ProxyTools {
                         isError = true
                     )
 
+                EnumValidation.error(action, setOf("modify", "drop", "tag"), "action")?.let {
+                    return@addTool CallToolResult(content = listOf(TextContent(it.toString())), isError = true)
+                }
+
                 val replaceHeader = args["modify_replace_header"]?.jsonObject?.let { obj ->
                     obj.entries.associate { (k, v) -> k to v.jsonPrimitive.content }
                 }
@@ -432,6 +437,10 @@ object ProxyTools {
                         }.toString())),
                         isError = true
                     )
+
+                EnumValidation.error(action, setOf("modify", "drop", "tag"), "action")?.let {
+                    return@addTool CallToolResult(content = listOf(TextContent(it.toString())), isError = true)
+                }
 
                 val replaceHeader = args["modify_replace_header"]?.jsonObject?.let { obj ->
                     obj.entries.associate { (k, v) -> k to v.jsonPrimitive.content }

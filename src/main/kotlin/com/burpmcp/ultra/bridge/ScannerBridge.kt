@@ -124,8 +124,8 @@ class ScannerBridge(
 
             val builtInConfig = when (auditMode?.lowercase()) {
                 "light" -> BuiltInAuditConfiguration.LEGACY_PASSIVE_AUDIT_CHECKS
-                "thorough" -> BuiltInAuditConfiguration.LEGACY_ACTIVE_AUDIT_CHECKS
-                else -> BuiltInAuditConfiguration.LEGACY_ACTIVE_AUDIT_CHECKS
+                null, "normal", "thorough" -> BuiltInAuditConfiguration.LEGACY_ACTIVE_AUDIT_CHECKS
+                else -> throw IllegalArgumentException("Invalid audit_mode '$auditMode'. Allowed: light, normal, thorough")
             }
             val auditConfig = AuditConfiguration.auditConfiguration(builtInConfig)
 
@@ -518,13 +518,15 @@ class ScannerBridge(
                 "HIGH" -> AuditIssueSeverity.HIGH
                 "MEDIUM" -> AuditIssueSeverity.MEDIUM
                 "LOW" -> AuditIssueSeverity.LOW
-                else -> AuditIssueSeverity.INFORMATION
+                "INFORMATION", "INFO" -> AuditIssueSeverity.INFORMATION
+                else -> throw IllegalArgumentException("Invalid severity '$severity'. Allowed: high, medium, low, information")
             }
 
             val issueConfidence = when (confidence.uppercase()) {
                 "CERTAIN" -> AuditIssueConfidence.CERTAIN
                 "FIRM" -> AuditIssueConfidence.FIRM
-                else -> AuditIssueConfidence.TENTATIVE
+                "TENTATIVE" -> AuditIssueConfidence.TENTATIVE
+                else -> throw IllegalArgumentException("Invalid confidence '$confidence'. Allowed: certain, firm, tentative")
             }
 
             var requestResponse: HttpRequestResponse? = null
@@ -640,13 +642,15 @@ class ScannerBridge(
                 "HIGH" -> AuditIssueSeverity.HIGH
                 "MEDIUM" -> AuditIssueSeverity.MEDIUM
                 "LOW" -> AuditIssueSeverity.LOW
-                else -> AuditIssueSeverity.INFORMATION
+                "INFORMATION", "INFO" -> AuditIssueSeverity.INFORMATION
+                else -> throw IllegalArgumentException("Invalid severity '$severity'. Allowed: high, medium, low, information")
             }
 
             val issueConfidence = when (confidence.uppercase()) {
                 "CERTAIN" -> AuditIssueConfidence.CERTAIN
                 "FIRM" -> AuditIssueConfidence.FIRM
-                else -> AuditIssueConfidence.TENTATIVE
+                "TENTATIVE" -> AuditIssueConfidence.TENTATIVE
+                else -> throw IllegalArgumentException("Invalid confidence '$confidence'. Allowed: certain, firm, tentative")
             }
 
             val scanCheck = object : ScanCheck {
