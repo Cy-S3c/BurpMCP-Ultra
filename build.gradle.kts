@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.v0rt3x.burpmcp"
-version = "2.1.0"
+version = "2.1.1"
 
 // Build-JDK (GitHub issue #2): Kotlin 2.1.20 cannot even COMPILE the Gradle .kts
 // scripts under Java 22+ (cryptic "25.0.3" crash), so a script-level version
