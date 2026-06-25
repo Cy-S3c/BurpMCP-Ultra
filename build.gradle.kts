@@ -105,6 +105,9 @@ val generateBuildInfo by tasks.registering {
 }
 kotlin.sourceSets["main"].kotlin.srcDir(generatedVersionDir)
 tasks.named("compileKotlin") { dependsOn(generateBuildInfo) }
+// Make the test compile's dependency on the generated source explicit (it also holds
+// transitively via compileKotlin, but this is future-proof against source-set changes).
+tasks.named("compileTestKotlin") { dependsOn(generateBuildInfo) }
 
 tasks.shadowJar {
     archiveBaseName.set("burpmcp-ultra")

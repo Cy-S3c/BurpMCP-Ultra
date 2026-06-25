@@ -1,7 +1,7 @@
 # BurpMCP-Ultra — Security, Correctness & Capability Review
 
 > Author: project audit, 2026-06-12. Lenses: security researcher, pentester, security engineer, red-teamer, web hacker.
-> Scope: full project (~19.6k LOC, 24 bridges → 138 MCP tools + 8 resources, 3 localhost servers).
+> Scope: full project (~20k LOC, 32 bridges → 149 MCP tools + 8 resources, 3 localhost servers; the project had 24 bridges → 138 tools at the original 2026-06-12 audit).
 > Evidence cites `file:line`. Claims marked *(verify)* are high-confidence from a sub-analysis but not independently line-confirmed.
 
 ---
