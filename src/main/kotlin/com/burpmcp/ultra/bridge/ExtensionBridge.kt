@@ -1,6 +1,7 @@
 package com.burpmcp.ultra.bridge
 
 import burp.api.montoya.MontoyaApi
+import com.burpmcp.ultra.core.BuildInfo
 import com.burpmcp.ultra.state.StateManager
 import kotlinx.serialization.json.*
 
@@ -33,7 +34,7 @@ class ExtensionBridge(
                 // MCP server info. Both ports are plain MCP SSE transports; there is
                 // no Streamable HTTP or stdio transport (those were never implemented).
                 put("mcp", buildJsonObject {
-                    put("version", "2.1.0")
+                    put("version", BuildInfo.VERSION)
                     put("sse_port_primary", 9876)
                     put("sse_port_secondary", 9877)
                     put("dashboard_port", 9878)

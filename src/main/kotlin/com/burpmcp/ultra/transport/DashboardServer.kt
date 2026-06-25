@@ -2,6 +2,7 @@ package com.burpmcp.ultra.transport
 
 import burp.api.montoya.logging.Logging
 import com.burpmcp.ultra.bridge.BridgeFactory
+import com.burpmcp.ultra.core.BuildInfo
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.StateManager
 import io.ktor.http.*
@@ -362,7 +363,7 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 <div class="header">
     <div class="header-left">
         <h1>BurpMCP-Ultra</h1>
-        <span class="version">v2.0</span>
+        <span class="version">v${BuildInfo.VERSION}</span>
     </div>
     <div class="header-right">
         <div class="status-dot" id="statusDot"></div>

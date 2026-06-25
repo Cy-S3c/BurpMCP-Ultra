@@ -2,6 +2,7 @@ package com.burpmcp.ultra.transport
 
 import burp.api.montoya.logging.Logging
 import com.burpmcp.ultra.bridge.BridgeFactory
+import com.burpmcp.ultra.core.BuildInfo
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.StateManager
 import io.ktor.http.*
@@ -59,7 +60,7 @@ class McpServerManager(
         val server = Server(
             serverInfo = Implementation(
                 name = "burpmcp-ultra",
-                version = "2.1.0"
+                version = BuildInfo.VERSION
             ),
             options = ServerOptions(
                 capabilities = ServerCapabilities(

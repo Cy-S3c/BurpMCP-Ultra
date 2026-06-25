@@ -77,6 +77,35 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
+// --- Single-sourced version -------------------------------------------------
+// Generate BuildInfo.VERSION from the Gradle project `version` so every runtime
+// reference (UI tab, dashboard, MCP server identity) stays in lockstep with
+// build.gradle.kts and can never drift again (e.g. the old hardcoded dashboard
+// "v2.0" label). Bumping `version` above is now the ONLY edit needed.
+val generatedVersionDir = layout.buildDirectory.dir("generated/version/kotlin")
+val generateBuildInfo by tasks.registering {
+    val outDir = generatedVersionDir
+    val ver = project.version.toString()
+    inputs.property("version", ver)
+    outputs.dir(outDir)
+    doLast {
+        val f = outDir.get().file("com/burpmcp/ultra/core/BuildInfo.kt").asFile
+        f.parentFile.mkdirs()
+        f.writeText(
+            """
+            |package com.burpmcp.ultra.core
+            |
+            |/** Generated from the Gradle project version — do not edit by hand. */
+            |object BuildInfo {
+            |    const val VERSION: String = "$ver"
+            |}
+            |""".trimMargin()
+        )
+    }
+}
+kotlin.sourceSets["main"].kotlin.srcDir(generatedVersionDir)
+tasks.named("compileKotlin") { dependsOn(generateBuildInfo) }
+
 tasks.shadowJar {
     archiveBaseName.set("burpmcp-ultra")
     archiveClassifier.set("")
