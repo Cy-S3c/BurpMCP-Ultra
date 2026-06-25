@@ -2,7 +2,10 @@
   "mcpServers": {
     "burp": {
       "type": "sse",
-      "url": "http://127.0.0.1:9900/sse"
+      "url": "http://127.0.0.1:9900/",
+      "headers": {
+        "Authorization": "Bearer PASTE_TOKEN_FROM_SERVER_TAB"
+      }
     }
   }
 }

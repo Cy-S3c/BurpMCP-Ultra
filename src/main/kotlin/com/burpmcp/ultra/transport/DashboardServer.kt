@@ -3,6 +3,7 @@ package com.burpmcp.ultra.transport
 import burp.api.montoya.logging.Logging
 import com.burpmcp.ultra.bridge.BridgeFactory
 import com.burpmcp.ultra.core.BuildInfo
+import com.burpmcp.ultra.core.ConnectionInfo
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.StateManager
 import io.ktor.http.*
@@ -434,11 +435,11 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 <!-- Connections Tab -->
 <div class="tab-panel" id="panel-connections">
     <div class="conn-grid">
-        <div class="conn-card"><h4>Primary SSE Transport</h4><div class="url">http://127.0.0.1:9876/sse</div></div>
-        <div class="conn-card"><h4>Secondary SSE Transport</h4><div class="url">http://127.0.0.1:9877/sse</div></div>
-        <div class="conn-card"><h4>Dashboard</h4><div class="url">http://127.0.0.1:9878</div></div>
-        <div class="conn-card"><h4>Dashboard API - Proxy History</h4><div class="url">http://127.0.0.1:9878/api/proxy/recent?limit=50</div></div>
-        <div class="conn-card"><h4>MCP Client Config (Claude Code)</h4><div class="url" style="font-size:11px;">{"mcpServers":{"burpmcp":{"url":"http://127.0.0.1:9876/sse"}}}</div></div>
+        <div class="conn-card"><h4>Primary MCP SSE (root path, token required)</h4><div class="url">${ConnectionInfo.primarySseUrl}</div></div>
+        <div class="conn-card"><h4>Secondary MCP SSE (root path)</h4><div class="url">${ConnectionInfo.secondarySseUrl}</div></div>
+        <div class="conn-card"><h4>Dashboard</h4><div class="url">${ConnectionInfo.dashboardUrl}</div></div>
+        <div class="conn-card"><h4>Dashboard API - Proxy History</h4><div class="url">${ConnectionInfo.dashboardUrl}/api/proxy/recent?limit=50</div></div>
+        <div class="conn-card"><h4>MCP Client Config — replace token from the Server tab</h4><div class="url" style="font-size:11px;">${ConnectionInfo.clientConfigJson(null)}</div></div>
     </div>
 </div>
 

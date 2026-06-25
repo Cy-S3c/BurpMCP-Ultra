@@ -7,6 +7,7 @@ import burp.api.montoya.ui.editor.EditorOptions
 import burp.api.montoya.ui.editor.HttpRequestEditor
 import burp.api.montoya.ui.editor.HttpResponseEditor
 import com.burpmcp.ultra.bridge.BridgeFactory
+import com.burpmcp.ultra.core.ConnectionInfo
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.McpActivityEntry
 import com.burpmcp.ultra.state.StateManager
@@ -842,9 +843,9 @@ class BurpMcpUltraTab(
         content.add(JLabel("Connection Information").apply { font = font.deriveFont(Font.BOLD, 14f) }, gbc)
         gbc.gridwidth = 1
 
-        addRow(1, "SSE Transport:", JLabel("http://127.0.0.1:9876/sse"))
-        addRow(2, "SSE (secondary):", JLabel("http://127.0.0.1:9877/sse"))
-        addRow(3, "Dashboard:", JLabel("http://127.0.0.1:9878"))
+        addRow(1, "MCP SSE (root /):", JLabel(ConnectionInfo.primarySseUrl))
+        addRow(2, "SSE (secondary):", JLabel(ConnectionInfo.secondarySseUrl))
+        addRow(3, "Dashboard:", JLabel(ConnectionInfo.dashboardUrl))
 
         gbc.gridy = 4; gbc.gridx = 0; gbc.gridwidth = 2
         content.add(JSeparator(), gbc); gbc.gridwidth = 1
@@ -854,7 +855,7 @@ class BurpMcpUltraTab(
         content.add(JLabel("MCP Client Config").apply { font = font.deriveFont(Font.BOLD, 14f) }, gbc)
         gbc.gridwidth = 1
 
-        val configArea = JTextArea("""{"mcpServers":{"burp":{"type":"sse","url":"http://127.0.0.1:9876/sse","headers":{"Authorization":"Bearer $authToken"}}}}""")
+        val configArea = JTextArea(ConnectionInfo.clientConfigJson(authToken))
         configArea.isEditable = false; configArea.font = Font("Monospaced", Font.PLAIN, 11)
         configArea.lineWrap = true; configArea.wrapStyleWord = false; configArea.rows = 3
         gbc.gridy = 6; gbc.gridx = 0; gbc.gridwidth = 2

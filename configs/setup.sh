@@ -29,14 +29,14 @@ if command -v caddy &>/dev/null; then
         sudo cp "$SCRIPT_DIR/Caddyfile" /etc/caddy/Caddyfile
         sudo systemctl restart caddy
         echo "  Caddy configured and restarted"
-        MCP_URL="http://127.0.0.1:9900/sse"
+        MCP_URL="http://127.0.0.1:9900/"
     else
-        MCP_URL="http://127.0.0.1:9876/sse"
+        MCP_URL="http://127.0.0.1:9876/"
     fi
 else
     echo "  Caddy not installed. Using direct connection."
     echo "  Install with: sudo apt install caddy"
-    MCP_URL="http://127.0.0.1:9876/sse"
+    MCP_URL="http://127.0.0.1:9876/"
 fi
 
 # Step 3: Claude Code MCP config
@@ -54,10 +54,15 @@ echo "  {"
 echo "    \"mcpServers\": {"
 echo "      \"burp\": {"
 echo "        \"type\": \"sse\","
-echo "        \"url\": \"$MCP_URL\""
+echo "        \"url\": \"$MCP_URL\","
+echo "        \"headers\": { \"Authorization\": \"Bearer PASTE_TOKEN_FROM_SERVER_TAB\" }"
 echo "      }"
 echo "    }"
 echo "  }"
+echo ""
+echo "  NOTE: the endpoint is the root path '/' (not /sse), and the token is REQUIRED."
+echo "  Replace PASTE_TOKEN_FROM_SERVER_TAB with the token shown in the"
+echo "  BurpMCP-Ultra > Server tab inside Burp."
 echo ""
 
 # Step 4: Summary

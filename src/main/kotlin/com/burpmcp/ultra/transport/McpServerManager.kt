@@ -27,9 +27,9 @@ import kotlinx.coroutines.*
  * - **Primary SSE** on [ssePort] (default 9876).
  * - **Secondary SSE** on [httpPort] (default 9877).
  *
- * Both are plain MCP SSE transports (GET /sse + POST /message). There is no
- * "Streamable HTTP" or "stdio" transport — those were previously advertised but
- * never implemented.
+ * Both are plain MCP SSE transports: the SSE stream is the ROOT path "/" (GET) and
+ * the back-channel is "/?sessionId=..." (POST) — NOT "/sse". There is no "Streamable
+ * HTTP" or "stdio" transport — those were previously advertised but never implemented.
  *
  * @param bridges All bridge instances for tool/resource registration.
  * @param eventBus Shared event bus for event-related tools/resources.

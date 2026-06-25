@@ -2,7 +2,7 @@
   "mcpServers": {
     "burp": {
       "command": "npx",
-      "args": ["-y", "supergateway", "--sse", "http://127.0.0.1:9876/sse"]
+      "args": ["-y", "supergateway", "--sse", "http://127.0.0.1:9876/", "--header", "Authorization: Bearer PASTE_TOKEN_FROM_SERVER_TAB"]
     }
   }
 }
