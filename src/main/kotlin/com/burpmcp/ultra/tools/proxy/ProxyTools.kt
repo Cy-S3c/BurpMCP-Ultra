@@ -81,7 +81,7 @@ object ProxyTools {
             inputSchema = ToolSchema(
                 properties = buildJsonObject {
                     putJsonObject("pattern") { put("type", "string"); put("description", "Regex pattern to search for") }
-                    putJsonObject("search_in") { put("type", "string"); put("description", "Where to search: 'request', 'response', or 'both' (default 'both')") }
+                    putJsonObject("search_in") { put("type", "string"); put("description", "Where to search: 'url', 'request', 'response', or 'both' (default 'both' = url+request+response)") }
                     putJsonObject("case_sensitive") { put("type", "boolean"); put("description", "Case-sensitive matching (default false)") }
                     putJsonObject("max_results") { put("type", "integer"); put("description", "Maximum number of results (default 100)") }
                     putJsonObject("in_scope_only") { put("type", "boolean"); put("description", "Restrict to in-scope items (default false)") }

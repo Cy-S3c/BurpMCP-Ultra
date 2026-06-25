@@ -1,6 +1,7 @@
 package com.burpmcp.ultra.bridge
 
 import burp.api.montoya.MontoyaApi
+import com.burpmcp.ultra.core.ProxyHistorySearch
 import burp.api.montoya.core.Annotations
 import burp.api.montoya.core.HighlightColor
 import burp.api.montoya.http.message.MimeType
@@ -155,19 +156,22 @@ class ProxyBridge(
         val filter = ProxyHistoryFilter { item ->
             if (inScopeOnly && !item.request().isInScope()) return@ProxyHistoryFilter false
 
-            val searchRequest = searchIn.equals("request", ignoreCase = true) ||
-                searchIn.equals("both", ignoreCase = true)
-            val searchResponse = searchIn.equals("response", ignoreCase = true) ||
-                searchIn.equals("both", ignoreCase = true)
+            val t = ProxyHistorySearch.targets(searchIn)
 
             var found = false
-            if (searchRequest) {
-                // Match against the request only. item.contains(pattern) inherits
+            if (t.url) {
+                // Match against the fully-reconstructed URL (scheme+host+path+query),
+                // which the request text does not expose as one contiguous string.
+                val url = try { item.request().url() } catch (_: Exception) { "" }
+                found = compiledPattern.matcher(url).find()
+            }
+            if (!found && t.request) {
+                // Request text only. item.contains(pattern) inherits
                 // HttpRequestResponse.contains, which matches BOTH request and
                 // response, so a request-only search must inspect the request text.
                 found = compiledPattern.matcher(item.request().toString()).find()
             }
-            if (!found && searchResponse && item.hasResponse()) {
+            if (!found && t.response && item.hasResponse()) {
                 found = compiledPattern.matcher(item.response().toString()).find()
             }
             found
