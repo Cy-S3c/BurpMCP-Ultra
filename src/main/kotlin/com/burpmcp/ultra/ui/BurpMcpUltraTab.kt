@@ -47,7 +47,8 @@ class BurpMcpUltraTab(
     private val eventBus: EventBus,
     private val stateManager: StateManager,
     private val bridges: BridgeFactory.Bridges,
-    private val authToken: String
+    private val authToken: String,
+    private val bindHost: String
 ) {
     companion object {
         const val MAX_TABLE_ROWS = 2000
@@ -843,46 +844,76 @@ class BurpMcpUltraTab(
         content.add(JLabel("Connection Information").apply { font = font.deriveFont(Font.BOLD, 14f) }, gbc)
         gbc.gridwidth = 1
 
-        addRow(1, "MCP SSE (root /):", JLabel(ConnectionInfo.primarySseUrl))
-        addRow(2, "SSE (secondary):", JLabel(ConnectionInfo.secondarySseUrl))
-        addRow(3, "Dashboard:", JLabel(ConnectionInfo.dashboardUrl))
+        addRow(1, "MCP SSE (root /):", JLabel(ConnectionInfo.primarySseUrlForHost(bindHost)))
+        addRow(2, "SSE (secondary):", JLabel(ConnectionInfo.secondarySseUrlForHost(bindHost)))
+        addRow(3, "Dashboard:", JLabel(ConnectionInfo.dashboardUrlForHost(bindHost)))
 
         gbc.gridy = 4; gbc.gridx = 0; gbc.gridwidth = 2
         content.add(JSeparator(), gbc); gbc.gridwidth = 1
 
-        // MCP config
+        // Bind host config. The embedded servers are started before the UI is
+        // constructed, so changing this value takes effect on extension reload.
         gbc.gridy = 5; gbc.gridx = 0; gbc.gridwidth = 2
-        content.add(JLabel("MCP Client Config").apply { font = font.deriveFont(Font.BOLD, 14f) }, gbc)
+        content.add(JLabel("Server Bind Address").apply { font = font.deriveFont(Font.BOLD, 14f) }, gbc)
         gbc.gridwidth = 1
 
-        val configArea = JTextArea(ConnectionInfo.clientConfigJson(authToken))
-        configArea.isEditable = false; configArea.font = Font("Monospaced", Font.PLAIN, 11)
-        configArea.lineWrap = true; configArea.wrapStyleWord = false; configArea.rows = 3
-        gbc.gridy = 6; gbc.gridx = 0; gbc.gridwidth = 2
-        content.add(configArea, gbc)
-        val copyConfigBtn = JButton("Copy Config")
-        copyConfigBtn.addActionListener { copyToClipboard(configArea.text) }
-        gbc.gridy = 7; gbc.gridx = 0; gbc.gridwidth = 1; gbc.weightx = 0.0
-        content.add(copyConfigBtn, gbc)
-        gbc.gridwidth = 1
+        gbc.gridy = 6; gbc.gridx = 0; gbc.weightx = 0.0
+        content.add(JLabel("Bind host:").apply { font = font.deriveFont(Font.BOLD) }, gbc)
+        val bindHostField = JTextField(bindHost, 18)
+        bindHostField.font = Font("Monospaced", Font.PLAIN, 12)
+        gbc.gridx = 1; gbc.weightx = 1.0
+        content.add(bindHostField, gbc)
+
+        val saveBindHostBtn = JButton("Save Bind Address")
+        saveBindHostBtn.addActionListener {
+            val value = bindHostField.text.trim().ifEmpty { "127.0.0.1" }
+            api.persistence().preferences().setString("mcp_bind_host", value)
+            JOptionPane.showMessageDialog(
+                panel,
+                "Bind address saved as $value.\nReload the BurpMCP-Ultra extension for it to take effect.",
+                "BurpMCP-Ultra",
+                JOptionPane.INFORMATION_MESSAGE
+            )
+        }
+        gbc.gridy = 7; gbc.gridx = 1; gbc.weightx = 0.0
+        content.add(saveBindHostBtn, gbc)
 
         gbc.gridy = 8; gbc.gridx = 0; gbc.gridwidth = 2
         content.add(JSeparator(), gbc); gbc.gridwidth = 1
 
-        // Live stats
+        // MCP config
         gbc.gridy = 9; gbc.gridx = 0; gbc.gridwidth = 2
+        content.add(JLabel("MCP Client Config").apply { font = font.deriveFont(Font.BOLD, 14f) }, gbc)
+        gbc.gridwidth = 1
+
+        val configArea = JTextArea(ConnectionInfo.clientConfigJson(authToken, host = bindHost))
+        configArea.isEditable = false; configArea.font = Font("Monospaced", Font.PLAIN, 11)
+        configArea.lineWrap = true; configArea.wrapStyleWord = false; configArea.rows = 3
+        gbc.gridy = 10; gbc.gridx = 0; gbc.gridwidth = 2
+        content.add(configArea, gbc)
+        val copyConfigBtn = JButton("Copy Config")
+        copyConfigBtn.addActionListener { copyToClipboard(configArea.text) }
+        gbc.gridy = 11; gbc.gridx = 0; gbc.gridwidth = 1; gbc.weightx = 0.0
+        content.add(copyConfigBtn, gbc)
+        gbc.gridwidth = 1
+
+        gbc.gridy = 12; gbc.gridx = 0; gbc.gridwidth = 2
+        content.add(JSeparator(), gbc); gbc.gridwidth = 1
+
+        // Live stats
+        gbc.gridy = 13; gbc.gridx = 0; gbc.gridwidth = 2
         content.add(JLabel("Live Statistics").apply { font = font.deriveFont(Font.BOLD, 14f) }, gbc)
         gbc.gridwidth = 1
 
-        serverUptimeLabel = JLabel("00:00:00"); addRow(10, "Uptime:", serverUptimeLabel)
-        serverToolCallsLabel = JLabel("0"); addRow(11, "Total MCP Tool Calls:", serverToolCallsLabel)
-        serverEventsLabel = JLabel("0"); addRow(12, "Event Buffer:", serverEventsLabel)
-        serverWsLabel = JLabel("0"); addRow(13, "WebSocket Connections:", serverWsLabel)
-        serverCollabLabel = JLabel("0"); addRow(14, "Collaborator Clients:", serverCollabLabel)
-        serverScanLabel = JLabel("0"); addRow(15, "Active Scan Tasks:", serverScanLabel)
+        serverUptimeLabel = JLabel("00:00:00"); addRow(14, "Uptime:", serverUptimeLabel)
+        serverToolCallsLabel = JLabel("0"); addRow(15, "Total MCP Tool Calls:", serverToolCallsLabel)
+        serverEventsLabel = JLabel("0"); addRow(16, "Event Buffer:", serverEventsLabel)
+        serverWsLabel = JLabel("0"); addRow(17, "WebSocket Connections:", serverWsLabel)
+        serverCollabLabel = JLabel("0"); addRow(18, "Collaborator Clients:", serverCollabLabel)
+        serverScanLabel = JLabel("0"); addRow(19, "Active Scan Tasks:", serverScanLabel)
 
         // Filler
-        gbc.gridy = 16; gbc.gridx = 0; gbc.weighty = 1.0; gbc.gridwidth = 2
+        gbc.gridy = 20; gbc.gridx = 0; gbc.weighty = 1.0; gbc.gridwidth = 2
         content.add(JLabel(), gbc)
 
         panel.add(JScrollPane(content), BorderLayout.CENTER)
