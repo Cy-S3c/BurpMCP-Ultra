@@ -23,6 +23,7 @@ class DashboardServer(
     private val eventBus: EventBus,
     private val stateManager: StateManager,
     private val authToken: String,
+    private val bindHost: String = "127.0.0.1",
     private val port: Int = 9878,
     private val logging: Logging
 ) {
@@ -33,11 +34,16 @@ class DashboardServer(
     fun start() {
         scope.launch {
             try {
-                server = embeddedServer(CIO, port = port, host = "127.0.0.1") {
+                server = embeddedServer(CIO, port = port, host = bindHost) {
                     // Host-header allowlist + locked CORS + token auth. "/" is
                     // token-exempt (so the browser can load the page); the page
                     // then injects the token for its own /api + /events calls.
-                    installLocalhostSecurity(authToken, listOf(port), tokenExemptPaths = setOf("/"))
+                    installLocalhostSecurity(
+                        authToken,
+                        listOf(port),
+                        allowedSecurityHosts(),
+                        tokenExemptPaths = setOf("/")
+                    )
                     install(SSE)
 
                     routing {
@@ -159,7 +165,7 @@ class DashboardServer(
                     }
                 }.also { it.start(wait = false) }
 
-                logging.logToOutput("BurpMCP-Ultra: Dashboard server started on http://127.0.0.1:$port")
+                logging.logToOutput("BurpMCP-Ultra: Dashboard server started on http://$bindHost:$port")
             } catch (e: Exception) {
                 logging.logToError("BurpMCP-Ultra: Dashboard server failed: ${e.message}")
             }
@@ -173,7 +179,15 @@ class DashboardServer(
 
     private fun getDashboardHtml(): String {
         return DASHBOARD_HTML
+            .replace("__PRIMARY_SSE_URL__", ConnectionInfo.primarySseUrlForHost(bindHost))
+            .replace("__SECONDARY_SSE_URL__", ConnectionInfo.secondarySseUrlForHost(bindHost))
+            .replace("__DASHBOARD_URL__", ConnectionInfo.dashboardUrlForHost(bindHost))
+            .replace("__DASHBOARD_PROXY_HISTORY_URL__", "${ConnectionInfo.dashboardUrlForHost(bindHost)}/api/proxy/recent?limit=50")
+            .replace("__MCP_CLIENT_CONFIG__", ConnectionInfo.clientConfigJson(null, host = bindHost))
     }
+
+    private fun allowedSecurityHosts(): List<String> =
+        listOf(bindHost, "127.0.0.1", "localhost").distinct()
 
     companion object {
         val DASHBOARD_HTML = """
@@ -435,11 +449,11 @@ body{font-family:var(--font);background:var(--bg-primary);color:var(--text-prima
 <!-- Connections Tab -->
 <div class="tab-panel" id="panel-connections">
     <div class="conn-grid">
-        <div class="conn-card"><h4>Primary MCP SSE (root path, token required)</h4><div class="url">${ConnectionInfo.primarySseUrl}</div></div>
-        <div class="conn-card"><h4>Secondary MCP SSE (root path)</h4><div class="url">${ConnectionInfo.secondarySseUrl}</div></div>
-        <div class="conn-card"><h4>Dashboard</h4><div class="url">${ConnectionInfo.dashboardUrl}</div></div>
-        <div class="conn-card"><h4>Dashboard API - Proxy History</h4><div class="url">${ConnectionInfo.dashboardUrl}/api/proxy/recent?limit=50</div></div>
-        <div class="conn-card"><h4>MCP Client Config — replace token from the Server tab</h4><div class="url" style="font-size:11px;">${ConnectionInfo.clientConfigJson(null)}</div></div>
+        <div class="conn-card"><h4>Primary MCP SSE (root path, token required)</h4><div class="url">__PRIMARY_SSE_URL__</div></div>
+        <div class="conn-card"><h4>Secondary MCP SSE (root path)</h4><div class="url">__SECONDARY_SSE_URL__</div></div>
+        <div class="conn-card"><h4>Dashboard</h4><div class="url">__DASHBOARD_URL__</div></div>
+        <div class="conn-card"><h4>Dashboard API - Proxy History</h4><div class="url">__DASHBOARD_PROXY_HISTORY_URL__</div></div>
+        <div class="conn-card"><h4>MCP Client Config — replace token from the Server tab</h4><div class="url" style="font-size:11px;">__MCP_CLIENT_CONFIG__</div></div>
     </div>
 </div>
 

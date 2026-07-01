@@ -34,6 +34,7 @@ import kotlinx.coroutines.*
  * @param bridges All bridge instances for tool/resource registration.
  * @param eventBus Shared event bus for event-related tools/resources.
  * @param stateManager Shared state for stateful tools.
+ * @param bindHost Interface address to bind the transport servers to.
  * @param ssePort TCP port for the primary SSE transport (default 9876).
  * @param httpPort TCP port for the secondary SSE transport (default 9877).
  * @param logging Burp Suite logging API for startup/error messages.
@@ -43,6 +44,7 @@ class McpServerManager(
     private val eventBus: EventBus,
     private val stateManager: StateManager,
     private val authToken: String,
+    private val bindHost: String = "127.0.0.1",
     private val ssePort: Int = 9876,
     private val httpPort: Int = 9877,
     private val logging: Logging
@@ -133,34 +135,34 @@ class McpServerManager(
     ) {
         scope.launch {
             try {
-                val server = embeddedServer(CIO, port = port, host = "127.0.0.1") {
-                    installLocalhostSecurity(authToken, listOf(port))
+                val server = embeddedServer(CIO, port = port, host = bindHost) {
+                    installLocalhostSecurity(authToken, listOf(port), allowedSecurityHosts())
                     mcp(serverFactory())
                 }
                 server.start(wait = false)
                 assign(server)
 
                 if (verifyListening(port)) {
-                    logging.logToOutput("BurpMCP-Ultra: $label transport listening on http://127.0.0.1:$port (MCP SSE endpoint is the root path '/', not '/sse')")
+                    logging.logToOutput("BurpMCP-Ultra: $label transport listening on http://$bindHost:$port (MCP SSE endpoint is the root path '/', not '/sse')")
                 } else {
                     logging.logToError(
-                        "BurpMCP-Ultra: $label transport reported start() but port $port is NOT listening. " +
+                        "BurpMCP-Ultra: $label transport reported start() but $bindHost:$port is NOT listening. " +
                             "This is the GitHub issue #2/#3 symptom — almost always a JAR built with Java 22+ " +
                             "(Kotlin/Ktor/MCP-SDK incompatibility). Rebuild with a JDK 17-21 (NOT Burp's bundled Java 25)."
                     )
                 }
             } catch (e: Exception) {
-                logging.logToError("BurpMCP-Ultra: Failed to start $label transport on port $port: ${e.message}")
+                logging.logToError("BurpMCP-Ultra: Failed to start $label transport on $bindHost:$port: ${e.message}")
                 logging.logToError("BurpMCP-Ultra: Stack trace: ${e.stackTraceToString()}")
             }
         }
     }
 
-    /** Probes 127.0.0.1:[port] for up to ~3s to confirm the engine actually bound the socket. */
+    /** Probes [bindHost]:[port] for up to ~3s to confirm the engine actually bound the socket. */
     private suspend fun verifyListening(port: Int): Boolean {
         repeat(15) {
             try {
-                java.net.Socket().use { it.connect(java.net.InetSocketAddress("127.0.0.1", port), 200) }
+                java.net.Socket().use { it.connect(java.net.InetSocketAddress(bindHost, port), 200) }
                 return true
             } catch (_: Exception) {
                 kotlinx.coroutines.delay(200)
@@ -168,6 +170,9 @@ class McpServerManager(
         }
         return false
     }
+
+    private fun allowedSecurityHosts(): List<String> =
+        listOf(bindHost, "127.0.0.1", "localhost").distinct()
 
     /**
      * Gracefully stops both transport servers and cancels the coroutine scope.

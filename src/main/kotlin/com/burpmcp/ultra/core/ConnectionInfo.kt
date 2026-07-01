@@ -18,11 +18,15 @@ object ConnectionInfo {
     const val TOKEN_PLACEHOLDER = "PASTE_TOKEN_FROM_SERVER_TAB"
 
     /** The MCP SSE endpoint URL for [port] — the ROOT path `/`, never `/sse`. */
-    fun sseUrl(port: Int): String = "http://127.0.0.1:$port/"
+    fun sseUrl(port: Int, host: String = "127.0.0.1"): String = "http://$host:$port/"
 
     val primarySseUrl: String get() = sseUrl(PRIMARY_PORT)
     val secondarySseUrl: String get() = sseUrl(SECONDARY_PORT)
-    val dashboardUrl: String get() = "http://127.0.0.1:$DASHBOARD_PORT"
+    val dashboardUrl: String get() = dashboardUrlForHost()
+
+    fun primarySseUrlForHost(host: String): String = sseUrl(PRIMARY_PORT, host)
+    fun secondarySseUrlForHost(host: String): String = sseUrl(SECONDARY_PORT, host)
+    fun dashboardUrlForHost(host: String = "127.0.0.1"): String = "http://$host:$DASHBOARD_PORT"
 
     /**
      * A ready-to-paste MCP client config. Pass the real [token] ONLY for same-process
@@ -30,8 +34,8 @@ object ConnectionInfo {
      * token is not embedded in HTML — the user then fills [TOKEN_PLACEHOLDER] from the
      * Server tab (this preserves the dashboard's HttpOnly-cookie token confidentiality).
      */
-    fun clientConfigJson(token: String?, port: Int = PRIMARY_PORT): String {
+    fun clientConfigJson(token: String?, port: Int = PRIMARY_PORT, host: String = "127.0.0.1"): String {
         val bearer = token ?: TOKEN_PLACEHOLDER
-        return """{"mcpServers":{"burp":{"type":"sse","url":"${sseUrl(port)}","headers":{"Authorization":"Bearer $bearer"}}}}"""
+        return """{"mcpServers":{"burp":{"type":"sse","url":"${sseUrl(port, host)}","headers":{"Authorization":"Bearer $bearer"}}}}"""
     }
 }

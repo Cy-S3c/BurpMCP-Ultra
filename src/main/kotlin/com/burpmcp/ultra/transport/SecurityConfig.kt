@@ -50,12 +50,11 @@ object SecurityConfig {
 fun Application.installLocalhostSecurity(
     token: String,
     ports: List<Int>,
+    hosts: List<String> = listOf("127.0.0.1", "localhost"),
     tokenExemptPaths: Set<String> = emptySet()
 ) {
-    val allowedHosts = ports.flatMap { listOf("127.0.0.1:$it", "localhost:$it") }.toSet()
-    val allowedOrigins = ports.flatMap {
-        listOf("http://127.0.0.1:$it", "http://localhost:$it")
-    }.toSet()
+    val allowedHosts = ports.flatMap { port -> hosts.map { host -> "$host:$port" } }.toSet()
+    val allowedOrigins = ports.flatMap { port -> hosts.map { host -> "http://$host:$port" } }.toSet()
 
     install(CORS) {
         allowMethod(HttpMethod.Options)
@@ -65,10 +64,11 @@ fun Application.installLocalhostSecurity(
         allowHeader(HttpHeaders.Authorization)
         allowHeader(HttpHeaders.ContentType)
         allowNonSimpleContentTypes = true
-        // Only loopback origins are ever permitted — never anyHost().
+        // Only explicitly configured origins are ever permitted — never anyHost().
         ports.forEach { p ->
-            allowHost("127.0.0.1:$p", schemes = listOf("http"))
-            allowHost("localhost:$p", schemes = listOf("http"))
+            hosts.forEach { host ->
+                allowHost("$host:$p", schemes = listOf("http"))
+            }
         }
     }
 
