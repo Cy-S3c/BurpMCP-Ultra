@@ -532,8 +532,18 @@ class ScannerBridge(
 
             var requestResponse: HttpRequestResponse? = null
             if (request != null && response != null) {
+                // Same fix as SitemapBridge.addIssue: a request built without an HttpService
+                // has no host to resolve, which NPEs inside the Montoya API once the issue is
+                // filed into the site map. Derive host/port/TLS from the issue's `url` param.
+                val parsedUrl = java.net.URI(url)
+                val useTls = parsedUrl.scheme?.lowercase() != "http"
+                val host = parsedUrl.host
+                    ?: throw IllegalArgumentException("Could not parse host from url: $url")
+                val port = if (parsedUrl.port != -1) parsedUrl.port else if (useTls) 443 else 80
+                val httpService = HttpService.httpService(host, port, useTls)
+
                 val reqBytes = Base64.getDecoder().decode(request)
-                val httpRequest = HttpRequest.httpRequest(BurpByteArray.byteArray(*reqBytes))
+                val httpRequest = HttpRequest.httpRequest(BurpByteArray.byteArray(*reqBytes)).withService(httpService)
                 val respBytes = Base64.getDecoder().decode(response)
                 val httpResponse = HttpResponse.httpResponse(BurpByteArray.byteArray(*respBytes))
                 requestResponse = HttpRequestResponse.httpRequestResponse(httpRequest, httpResponse)

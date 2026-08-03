@@ -168,7 +168,21 @@ class SitemapBridge(private val api: MontoyaApi) {
 
         val requestResponses = mutableListOf<HttpRequestResponse>()
         if (request != null) {
-            val httpRequest = HttpRequest.httpRequest(request)
+            // A request built without an HttpService has no host to resolve, which crashes
+            // the Montoya API internals (NPE) once it tries to file the issue into the site
+            // map. Derive host/port/TLS from the issue's own `url` param and attach it.
+            val parsedUrl = try {
+                java.net.URI(url)
+            } catch (e: Exception) {
+                throw IllegalArgumentException("Could not parse url '$url' to derive host/port for request/response evidence: ${e.message}")
+            }
+            val useTls = parsedUrl.scheme?.lowercase() != "http"
+            val host = parsedUrl.host
+                ?: throw IllegalArgumentException("Could not parse host from url: $url")
+            val port = if (parsedUrl.port != -1) parsedUrl.port else if (useTls) 443 else 80
+            val httpService = HttpService.httpService(host, port, useTls)
+
+            val httpRequest = HttpRequest.httpRequest(request).withService(httpService)
             val httpResponse = if (response != null) {
                 HttpResponse.httpResponse(response)
             } else {
