@@ -2,6 +2,8 @@
 
 # BurpMCP-Ultra
 
+[![MCP Toplist](https://mcptoplist.com/badge/pulsemcp%2Fcy-s3c-burpmcp-ultra.svg)](https://mcptoplist.com/server/pulsemcp%2Fcy-s3c-burpmcp-ultra)
+
 **The most powerful MCP server for Burp Suite Professional.**
 
 Drop a single JAR into Burp, connect Claude Code (or any MCP client), and drive every
