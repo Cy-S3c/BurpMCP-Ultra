@@ -69,7 +69,7 @@ cd BurpMCP-Ultra
 ./gradlew shadowJar
 ```
 
-Output: `build/libs/burpmcp-ultra-2.1.0.jar` (~13 MB). A **JDK 17–21** must be installed —
+Output: `build/libs/burpmcp-ultra-2.3.1.jar` (~13 MB). A **JDK 17–21** must be installed —
 see [Building from Source](#building-from-source). Pre-built JARs are on the
 [Releases](https://github.com/Cy-S3c/BurpMCP-Ultra/releases) page.
 
@@ -573,7 +573,7 @@ cd BurpMCP-Ultra
 # Gradle auto-selects an installed JDK 17 for the build daemon, so this works even if your
 # default `java` is Burp's Java 25. If no JDK 17 is discoverable, install one (or set JAVA_HOME).
 ./gradlew shadowJar
-# Output: build/libs/burpmcp-ultra-2.1.0.jar
+# Output: build/libs/burpmcp-ultra-2.3.1.jar
 ```
 
 **Windows (PowerShell / cmd)**
@@ -583,7 +583,7 @@ cd BurpMCP-Ultra
 :: Gradle auto-selects an installed JDK 17 for the build daemon, so this works even if your
 :: default java is Burp's Java 25. If no JDK 17 is discoverable, install one (or set JAVA_HOME).
 gradlew.bat shadowJar
-:: Output: build\libs\burpmcp-ultra-2.1.0.jar
+:: Output: build\libs\burpmcp-ultra-2.3.1.jar
 ```
 
 > If no JDK 17 is found, Gradle fails with a clear "no compatible daemon JVM" error instead of

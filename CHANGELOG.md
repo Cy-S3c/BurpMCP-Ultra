@@ -4,6 +4,62 @@ All notable changes to BurpMCP-Ultra are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 [Semantic Versioning](https://semver.org/) (see `docs/ROADMAP.md` for the semver convention).
 
+## [2.3.1] — 2026-09-16 — The agent's findings, rendered in Burp — and durable
+
+Theme: a native **Findings** tab that shows what the agent records via `findings_add`, a durable
+per-project findings store so that memory survives reloads, richer finding fields (CVSS, OWASP Top 10
+2021, steps, request/response evidence), and fixes for the Proxy Explorer / Scanner tabs — including
+the "search always returns 0 rows" bug most plausibly behind [discussion #16](https://github.com/Cy-S3c/BurpMCP-Ultra/discussions/16).
+
+### Added
+- **Findings tab (tab #4)** — the agent's deduplicated findings working memory, rendered natively in
+  Burp: a severity/CVSS color-coded table (ID, Severity, CVSS, Type, OWASP 2021, URL, Location,
+  Created), a detail pane with the full record, and **request/response evidence in Burp-native
+  read-only editors**. Severity filter (**including Critical**), free-text search (type / URL /
+  location / detail / OWASP), right-click Copy URL / Copy Finding JSON / Delete Finding, and a
+  confirmed Clear All. The tab live-updates when the agent records findings (1.5 s refresh, rebuild
+  only on change so an operator's selection is never reset) and refreshes on tab selection.
+- **Durable findings store** (`~/.burpmcp-ultra-findings.jsonl`) — findings used to live only in
+  memory and were wiped by `StateManager.cleanup()` on every extension reload / Burp restart, while
+  the (persisted) MCP activity log still *showed* the historical `findings_add` calls — making it
+  look like findings vanished for no reason. New `FindingsStore` mirrors `ActivityStore`: JSON
+  Lines, appended per entry, **project-tagged**, multi-project-safe rewrites on delete/clear,
+  restored on startup with the shared id counter continued past restored suffixes so new ids never
+  collide. Agent adds persist via a listener; operator deletes rewrite the store.
+- **Richer `findings_add`** — six new optional fields:
+  - `cvss_score` — validated (blank or 0.0–10.0; anything else returns an actionable error)
+  - `cvss_vector` — e.g. `CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H`
+  - `owasp_category` — **normalized to canonical OWASP Top 10 2021** (`A03`, `a03:2021`,
+    `injection`, `SSRF`, `broken access control` → `A03:2021 - Injection` etc.); unrecognized
+    values pass through unchanged; the valid list is embedded in the tool schema
+  - `steps_to_reproduce`, `request`, `response` — raw evidence, rendered in the tab's editors
+    (truncated at 4 000 chars in `findings_list` output)
+- **Critical severity** in the Findings tab filter and the shared severity renderer.
+
+### Fixed
+- **Proxy Explorer: Search always returned 0 rows.** The Search action read `result["matches"]`, a
+  key `searchHistory` never emits (it returns `items`, with only the *count* named
+  `total_matches`) — so every search silently emptied the table. A failed search now also surfaces
+  its error instead of looking identical to "no matches".
+- **Proxy Explorer: HTTP traffic was shown (and sent) as HTTPS.** The detail viewer and the
+  Send-to-Repeater/Intruder actions read `item["is_tls"]`, which the serializer never emits (the
+  key is `secure`); the fallback defaulted every miss to TLS, so plain-HTTP items rendered with an
+  `https://` service and failed when sent. Now reads `secure`, falling back to port-based inference.
+- **Proxy Explorer: history-cache race** — the cache was cleared on the worker thread while the
+  table rebuilt later on the EDT; both now rebuild together inside the EDT block.
+- **Scanner: Host column was always blank** — the UI read `issue["host"]`, which `serializeIssue`
+  never emits; the host is now derived from the issue's base URL.
+- **Scanner: issue evidence was serialized but never shown** — the detail pane is now tabbed
+  (Details + **Request Evidence**), rendering the first `request_responses` pair in a Burp-native
+  read-only request editor.
+- **`http_send_request(raw_request=…)` still kettled on LLM bare-LF output** — the final [#7](https://github.com/Cy-S3c/BurpMCP-Ultra/issues/7)
+  gap: 2.3.0 normalized CRLF in the repeater/intruder/organizer/sitemap/analysis builders but left
+  the raw-request path of `http_send_request` verbatim, straight into the same
+  `HttpRequest.httpRequest(service, string)` call that folds a bare-LF message into the HTTP/2
+  `:path`. `buildFromRawRequest` now normalizes LF→CRLF **before** `fixContentLength` (which keys
+  on `\r\n\r\n` and silently no-ops on bare-LF input). Lossless for deliberate CRLF — smuggling
+  research keeps its `\r\n`, and `http_send_raw_bytes` remains byte-verbatim by design.
+
 ## [2.3.0] — 2026-08-05 — IDOR hunting, header-less clients & a 33-bug QA sweep
 
 Theme: a new IDOR capability, MCP clients that could never connect can now connect, and the backlog

@@ -22,3 +22,8 @@ __pycache__/
 
 # Local config
 *.local
+
+# Local build / test artifacts (copyJar convenience copy at repo root, Kotlin daemon dirs, Burp project files)
+.kotlin/
+burpmcp-ultra.jar
+*.burp
