@@ -13,8 +13,10 @@ import com.burpmcp.ultra.core.RebindOutcome
 import com.burpmcp.ultra.events.EventBus
 import com.burpmcp.ultra.state.McpActivityEntry
 import com.burpmcp.ultra.state.StateManager
+import com.burpmcp.ultra.state.StoredFinding
 import com.burpmcp.ultra.transport.ActivityStore
 import com.burpmcp.ultra.transport.BindHostPolicy
+import com.burpmcp.ultra.transport.FindingsStore
 import com.burpmcp.ultra.transport.McpServerManager
 import kotlinx.serialization.json.*
 import java.awt.*
@@ -41,9 +43,10 @@ import javax.swing.table.DefaultTableModel
  * 1. MCP Activity   — Real-time tool call monitor with Burp request/response editors
  * 2. Proxy Explorer  — Browse/search proxy history with Burp-native viewers
  * 3. Scanner         — Live scanner findings with severity/confidence display
- * 4. Collaborator    — Create OOB clients, generate payloads, poll interactions
- * 5. Rules           — View/manage proxy, traffic, and session rules
- * 6. Server          — Server config, connection info, stats
+ * 4. Findings        — Agent-recorded findings (findings_add tool working memory)
+ * 5. Collaborator    — Create OOB clients, generate payloads, poll interactions
+ * 6. Rules           — View/manage proxy, traffic, and session rules
+ * 7. Server          — Server config, connection info, stats
  */
 class BurpMcpUltraTab(
     private val api: MontoyaApi,
@@ -58,6 +61,7 @@ class BurpMcpUltraTab(
     companion object {
         const val MAX_TABLE_ROWS = 2000
         private val TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
+        private val FINDING_TIME_FORMAT = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")
         private val NUMBER_FORMAT: NumberFormat = NumberFormat.getIntegerInstance()
     }
 
@@ -83,6 +87,7 @@ class BurpMcpUltraTab(
         tabbedPane.addTab("MCP Activity", buildActivityTab())
         tabbedPane.addTab("Proxy Explorer", buildProxyTab())
         tabbedPane.addTab("Scanner", buildScannerTab())
+        tabbedPane.addTab("Findings", buildFindingsTab())
         tabbedPane.addTab("Collaborator", buildCollaboratorTab())
         tabbedPane.addTab("Rules", buildRulesTab())
         tabbedPane.addTab("Server", buildServerTab())
@@ -98,6 +103,7 @@ class BurpMcpUltraTab(
         refreshTimer = Timer(1500) {
             refreshServerTab()
             refreshRulesTab()
+            refreshFindingsTab()
             // Activity stats (incl. Events count from the event bus) must refresh on
             // the timer too — otherwise the bar is frozen until an MCP tool call fires
             // the activity listener, so "Events: 0" never updates from proxy traffic.
@@ -108,13 +114,14 @@ class BurpMcpUltraTab(
 
         // Lazily load Proxy/Scanner the first time each tab is shown, so they are
         // not permanently blank waiting for a manual Fetch click (tab order:
-        // 0 Activity, 1 Proxy, 2 Scanner, 3 Collaborator, 4 Rules, 5 Server).
+        // 0 Activity, 1 Proxy, 2 Scanner, 3 Findings, 4 Collaborator, 5 Rules, 6 Server).
         var proxyLoaded = false
         var scannerLoaded = false
         tabbedPane.addChangeListener {
             when (tabbedPane.selectedIndex) {
                 1 -> if (!proxyLoaded) { proxyLoaded = true; proxyFetchButton?.doClick() }
                 2 -> if (!scannerLoaded) { scannerLoaded = true; scannerFetchButton?.doClick() }
+                3 -> rebuildFindingsTable()
             }
         }
 
@@ -467,8 +474,11 @@ class BurpMcpUltraTab(
                 val result = bridges.proxy.getHistory(0, count, host, method, status, null, scopeCheck.isSelected, true, true, null)
                 if (showBridgeError(result, "Fetch proxy history")) return@SwingWorker
                 val items = result["items"]?.jsonArray ?: JsonArray(emptyList())
-                proxyHistoryCache.clear()
                 SwingUtilities.invokeLater {
+                    // Cache and table must be rebuilt together on the EDT — clearing the
+                    // cache on the worker thread left a window where a click indexed an
+                    // empty cache against a still-populated table.
+                    proxyHistoryCache.clear()
                     proxyTableModel.rowCount = 0
                     for (item in items) {
                         val obj = item.jsonObject
@@ -487,14 +497,17 @@ class BurpMcpUltraTab(
             }
         }
 
-        // Search action
+        // Search action. searchHistory returns the same "items" array shape as
+        // getHistory (plus total_matches) — NOT a "matches" key; reading the old
+        // key silently emptied the table for every search.
         searchBtn.addActionListener {
             val pattern = searchField.text.trim(); if (pattern.isEmpty()) return@addActionListener
             SwingWorker(api, "Searching proxy history...") {
                 val result = bridges.proxy.searchHistory(pattern, "both", false, 200, scopeCheck.isSelected, true, true, null)
-                val items = result["matches"]?.jsonArray ?: JsonArray(emptyList())
-                proxyHistoryCache.clear()
+                if (showBridgeError(result, "Search proxy history")) return@SwingWorker
+                val items = result["items"]?.jsonArray ?: JsonArray(emptyList())
                 SwingUtilities.invokeLater {
+                    proxyHistoryCache.clear()
                     proxyTableModel.rowCount = 0
                     for (item in items) {
                         val obj = item.jsonObject
@@ -529,7 +542,10 @@ class BurpMcpUltraTab(
             if (reqStr != null) {
                 val host = item["host"]?.jsonPrimitive?.contentOrNull ?: ""
                 val port = item["port"]?.jsonPrimitive?.intOrNull ?: 443
-                val tls = item["is_tls"]?.jsonPrimitive?.booleanOrNull ?: true
+                // The serializer emits "secure" — reading the old "is_tls" key made every
+                // miss default to TLS, so plain-HTTP items rendered (and were sent to
+                // Repeater/Intruder) as https.
+                val tls = item["secure"]?.jsonPrimitive?.booleanOrNull ?: (port == 443)
                 val service = burp.api.montoya.http.HttpService.httpService(host, port, tls)
                 proxyRequestEditor.setRequest(HttpRequest.httpRequest(service, reqStr))
             }
@@ -550,14 +566,14 @@ class BurpMcpUltraTab(
         menu.add(JMenuItem("Send to Repeater").apply { addActionListener {
             try {
                 val reqStr = item["request"]?.jsonPrimitive?.contentOrNull ?: return@addActionListener
-                val service = burp.api.montoya.http.HttpService.httpService(host, item["port"]?.jsonPrimitive?.intOrNull ?: 443, item["is_tls"]?.jsonPrimitive?.booleanOrNull ?: true)
+                val service = burp.api.montoya.http.HttpService.httpService(host, item["port"]?.jsonPrimitive?.intOrNull ?: 443, item["secure"]?.jsonPrimitive?.booleanOrNull ?: true)
                 api.repeater().sendToRepeater(HttpRequest.httpRequest(service, reqStr), "Proxy-$host")
             } catch (_: Exception) {}
         }})
         menu.add(JMenuItem("Send to Intruder").apply { addActionListener {
             try {
                 val reqStr = item["request"]?.jsonPrimitive?.contentOrNull ?: return@addActionListener
-                val service = burp.api.montoya.http.HttpService.httpService(host, item["port"]?.jsonPrimitive?.intOrNull ?: 443, item["is_tls"]?.jsonPrimitive?.booleanOrNull ?: true)
+                val service = burp.api.montoya.http.HttpService.httpService(host, item["port"]?.jsonPrimitive?.intOrNull ?: 443, item["secure"]?.jsonPrimitive?.booleanOrNull ?: true)
                 api.intruder().sendToIntruder(HttpRequest.httpRequest(service, reqStr))
             } catch (_: Exception) {}
         }})
@@ -573,6 +589,15 @@ class BurpMcpUltraTab(
 
     private lateinit var scannerTableModel: DefaultTableModel
     private lateinit var scannerDetailArea: JTextArea
+    private lateinit var scannerRequestEditor: HttpRequestEditor
+    private var scannerIssuesCache = listOf<JsonObject>()
+
+    /** Extracts the host from a serialized issue url (the bridge emits baseUrl, not host). */
+    private fun hostOf(url: String): String = try {
+        java.net.URI.create(url).host ?: url.substringBefore('/')
+    } catch (_: Exception) {
+        url.substringBefore('/')
+    }
 
     private fun buildScannerTab(): JPanel {
         val panel = JPanel(BorderLayout(0, 0))
@@ -603,34 +628,53 @@ class BurpMcpUltraTab(
         scannerTable.columnModel.getColumn(4).preferredWidth = 150
         scannerTable.columnModel.getColumn(0).cellRenderer = SeverityRenderer()
 
-        // Detail
+        // Detail: issue metadata + the triggering request when the issue carries evidence
         scannerDetailArea = JTextArea(8, 60)
         scannerDetailArea.isEditable = false; scannerDetailArea.font = Font("Monospaced", Font.PLAIN, 11)
         scannerDetailArea.lineWrap = true; scannerDetailArea.wrapStyleWord = true
         scannerDetailArea.text = "Click 'Fetch Issues' to load scanner findings."
+        scannerRequestEditor = api.userInterface().createHttpRequestEditor(EditorOptions.READ_ONLY)
+        val detailTabs = JTabbedPane(JTabbedPane.TOP)
+        detailTabs.addTab("Details", JScrollPane(scannerDetailArea))
+        detailTabs.addTab("Request Evidence", scannerRequestEditor.uiComponent())
 
-        var issuesCache = listOf<JsonObject>()
-        scannerTable.selectionModel.addListSelectionListener { e ->
-            if (!e.valueIsAdjusting) {
-                val vr = scannerTable.selectedRow; if (vr < 0) return@addListSelectionListener
-                val mr = scannerTable.convertRowIndexToModel(vr)
-                if (mr < issuesCache.size) {
-                    val issue = issuesCache[mr]
-                    val sb = StringBuilder()
-                    sb.appendLine("Name: ${issue["name"]?.jsonPrimitive?.contentOrNull ?: ""}")
-                    sb.appendLine("Severity: ${issue["severity"]?.jsonPrimitive?.contentOrNull ?: ""}")
-                    sb.appendLine("Confidence: ${issue["confidence"]?.jsonPrimitive?.contentOrNull ?: ""}")
-                    sb.appendLine("URL: ${issue["url"]?.jsonPrimitive?.contentOrNull ?: ""}")
-                    sb.appendLine()
-                    sb.appendLine("Detail:")
-                    sb.appendLine(issue["detail"]?.jsonPrimitive?.contentOrNull ?: "(none)")
-                    sb.appendLine()
-                    sb.appendLine("Remediation:")
-                    sb.appendLine(issue["remediation"]?.jsonPrimitive?.contentOrNull ?: "(none)")
-                    scannerDetailArea.text = sb.toString()
-                    scannerDetailArea.caretPosition = 0
+        fun showScannerDetail(issuesCache: List<JsonObject>) {
+            val vr = scannerTable.selectedRow; if (vr < 0) return
+            val mr = scannerTable.convertRowIndexToModel(vr)
+            if (mr >= issuesCache.size) return
+            val issue = issuesCache[mr]
+            val url = issue["url"]?.jsonPrimitive?.contentOrNull ?: ""
+            val sb = StringBuilder()
+            sb.appendLine("Name: ${issue["name"]?.jsonPrimitive?.contentOrNull ?: ""}")
+            sb.appendLine("Severity: ${issue["severity"]?.jsonPrimitive?.contentOrNull ?: ""}")
+            sb.appendLine("Confidence: ${issue["confidence"]?.jsonPrimitive?.contentOrNull ?: ""}")
+            sb.appendLine("URL: $url")
+            sb.appendLine()
+            sb.appendLine("Detail:")
+            sb.appendLine(issue["detail"]?.jsonPrimitive?.contentOrNull ?: "(none)")
+            sb.appendLine()
+            sb.appendLine("Remediation:")
+            sb.appendLine(issue["remediation"]?.jsonPrimitive?.contentOrNull ?: "(none)")
+            scannerDetailArea.text = sb.toString()
+            scannerDetailArea.caretPosition = 0
+
+            // The bridge serializes each evidence pair with the raw request text and its
+            // URL — render the first available one in the read-only Burp request editor.
+            try {
+                val pair = issue["request_responses"]?.jsonArray
+                    ?.mapNotNull { runCatching { it.jsonObject }.getOrNull() }
+                    ?.firstOrNull { !it["request"]?.jsonPrimitive?.contentOrNull.isNullOrBlank() }
+                val reqText = pair?.get("request")?.jsonPrimitive?.contentOrNull
+                val reqUrl = pair?.get("request_url")?.jsonPrimitive?.contentOrNull?.ifEmpty { null } ?: url
+                if (!reqText.isNullOrBlank() && reqUrl.isNotEmpty()) {
+                    scannerRequestEditor.setRequest(
+                        HttpRequest.httpRequest(burp.api.montoya.http.HttpService.httpService(reqUrl), reqText)
+                    )
                 }
-            }
+            } catch (_: Exception) {}
+        }
+        scannerTable.selectionModel.addListSelectionListener { e ->
+            if (!e.valueIsAdjusting) showScannerDetail(scannerIssuesCache)
         }
 
         scannerFetchButton = fetchBtn
@@ -642,31 +686,268 @@ class BurpMcpUltraTab(
                 val result = bridges.scanner.getAllIssues(urlPrefix, sev, conf, 500)
                 if (showBridgeError(result, "Fetch scanner issues")) return@SwingWorker
                 val items = result["issues"]?.jsonArray ?: JsonArray(emptyList())
-                issuesCache = items.map { it.jsonObject }
+                val fetched = items.map { it.jsonObject }
                 SwingUtilities.invokeLater {
+                    scannerIssuesCache = fetched
                     scannerTableModel.rowCount = 0
-                    for (issue in issuesCache) {
+                    for (issue in fetched) {
+                        val url = issue["url"]?.jsonPrimitive?.contentOrNull ?: ""
                         scannerTableModel.addRow(arrayOf(
                             issue["severity"]?.jsonPrimitive?.contentOrNull ?: "",
                             issue["confidence"]?.jsonPrimitive?.contentOrNull ?: "",
                             issue["name"]?.jsonPrimitive?.contentOrNull ?: "",
-                            issue["url"]?.jsonPrimitive?.contentOrNull ?: "",
-                            issue["host"]?.jsonPrimitive?.contentOrNull ?: ""
+                            url,
+                            hostOf(url)
                         ))
                     }
-                    countLabel.text = "Issues: ${issuesCache.size}"
+                    countLabel.text = "Issues: ${fetched.size}"
                 }
             }
         }
 
-        val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(scannerTable), JScrollPane(scannerDetailArea))
+        val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(scannerTable), detailTabs)
         split.resizeWeight = 0.6; split.dividerSize = 5
         panel.add(controls, BorderLayout.NORTH); panel.add(split, BorderLayout.CENTER)
         return panel
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    //  TAB 4: COLLABORATOR
+    //  TAB 4: FINDINGS (agent-recorded working memory)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    private lateinit var findingsTableModel: DefaultTableModel
+    private lateinit var findingsTable: JTable
+    private lateinit var findingsDetailArea: JTextArea
+    private lateinit var findingsRequestEditor: HttpRequestEditor
+    private lateinit var findingsResponseEditor: HttpResponseEditor
+    private lateinit var findingsCountLabel: JLabel
+    private val findingsCache = mutableListOf<StoredFinding>()
+    private var findingsSeverityFilter = "Any"
+    private var findingsSearch = ""
+    private var findingsSnapshot: List<String> = emptyList()
+
+    private fun buildFindingsTab(): JPanel {
+        val panel = JPanel(BorderLayout(0, 0))
+
+        // Controls
+        val controls = JPanel(FlowLayout(FlowLayout.LEFT, 6, 4))
+        val sevCombo = JComboBox(arrayOf("Any", "Critical", "High", "Medium", "Low", "Info"))
+        sevCombo.toolTipText = "Severity filter (prefix match, case-insensitive)"
+        val searchField = JTextField(16); searchField.toolTipText = "Search type / URL / location / detail / OWASP"
+        val refreshBtn = JButton("Refresh")
+        val clearBtn = JButton("Clear All")
+        controls.add(JLabel("Severity:")); controls.add(sevCombo)
+        controls.add(JLabel("Search:")); controls.add(searchField)
+        controls.add(refreshBtn)
+        controls.add(Box.createHorizontalStrut(12))
+        controls.add(clearBtn)
+        controls.add(Box.createHorizontalStrut(12))
+        findingsCountLabel = JLabel("Findings: 0")
+        controls.add(findingsCountLabel)
+
+        sevCombo.addActionListener { findingsSeverityFilter = sevCombo.selectedItem as String; rebuildFindingsTable() }
+        searchField.addKeyListener(object : java.awt.event.KeyAdapter() {
+            override fun keyReleased(e: java.awt.event.KeyEvent?) { findingsSearch = searchField.text.trim().lowercase(); rebuildFindingsTable() }
+        })
+        refreshBtn.addActionListener { rebuildFindingsTable() }
+        clearBtn.toolTipText = "Delete every recorded finding (memory + saved store — the agent can re-add them)"
+        clearBtn.addActionListener {
+            val n = stateManager.findings.size
+            if (n == 0) return@addActionListener
+            val ok = JOptionPane.showConfirmDialog(
+                mainPanel,
+                "Delete all $n recorded finding(s)?\nThe agent can re-add them via the findings_add tool.",
+                "Clear Findings", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE
+            )
+            if (ok != JOptionPane.YES_OPTION) return@addActionListener
+            stateManager.findings.clear()
+            syncFindingsStore()
+            rebuildFindingsTable()
+        }
+
+        // Table
+        findingsTableModel = object : DefaultTableModel(arrayOf("ID", "Severity", "CVSS", "Type", "OWASP 2021", "URL", "Location", "Created"), 0) {
+            override fun isCellEditable(r: Int, c: Int) = false
+        }
+        findingsTable = JTable(findingsTableModel)
+        findingsTable.fillsViewportHeight = true; findingsTable.rowHeight = 22; findingsTable.setShowGrid(false)
+        findingsTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION)
+        findingsTable.columnModel.getColumn(0).preferredWidth = 80; findingsTable.columnModel.getColumn(0).maxWidth = 100
+        findingsTable.columnModel.getColumn(1).preferredWidth = 70; findingsTable.columnModel.getColumn(1).maxWidth = 90
+        findingsTable.columnModel.getColumn(2).preferredWidth = 45; findingsTable.columnModel.getColumn(2).maxWidth = 60
+        findingsTable.columnModel.getColumn(3).preferredWidth = 120
+        findingsTable.columnModel.getColumn(4).preferredWidth = 220
+        findingsTable.columnModel.getColumn(5).preferredWidth = 260
+        findingsTable.columnModel.getColumn(6).preferredWidth = 110
+        findingsTable.columnModel.getColumn(7).preferredWidth = 95; findingsTable.columnModel.getColumn(7).maxWidth = 110
+        findingsTable.columnModel.getColumn(1).cellRenderer = SeverityRenderer()
+        findingsTable.columnModel.getColumn(2).cellRenderer = CvssRenderer()
+
+        // Detail: full metadata + the recorded request/response evidence
+        findingsDetailArea = JTextArea(10, 60)
+        findingsDetailArea.isEditable = false; findingsDetailArea.font = Font("Monospaced", Font.PLAIN, 11)
+        findingsDetailArea.lineWrap = true; findingsDetailArea.wrapStyleWord = true
+        findingsDetailArea.text = "Findings the agent records via the findings_add tool appear here automatically."
+        findingsRequestEditor = api.userInterface().createHttpRequestEditor(EditorOptions.READ_ONLY)
+        findingsResponseEditor = api.userInterface().createHttpResponseEditor(EditorOptions.READ_ONLY)
+        val detailTabs = JTabbedPane(JTabbedPane.TOP)
+        detailTabs.addTab("Details", JScrollPane(findingsDetailArea))
+        detailTabs.addTab("Request", findingsRequestEditor.uiComponent())
+        detailTabs.addTab("Response", findingsResponseEditor.uiComponent())
+
+        findingsTable.selectionModel.addListSelectionListener { e -> if (!e.valueIsAdjusting) showFindingDetail() }
+        findingsTable.addMouseListener(ContextMenuListener { row, e -> showFindingsContextMenu(row, e) })
+
+        val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, JScrollPane(findingsTable), detailTabs)
+        split.resizeWeight = 0.55; split.dividerSize = 5
+        panel.add(controls, BorderLayout.NORTH); panel.add(split, BorderLayout.CENTER)
+        rebuildFindingsTable()
+        return panel
+    }
+
+    private fun passesFindingsFilter(f: StoredFinding): Boolean {
+        if (findingsSeverityFilter != "Any") {
+            val sev = f.severity.lowercase()
+            if (!sev.startsWith(findingsSeverityFilter.lowercase())) return false
+        }
+        if (findingsSearch.isNotEmpty() &&
+            findingsSearch !in "${f.type} ${f.url} ${f.location} ${f.detail} ${f.owaspCategory}".lowercase()
+        ) return false
+        return true
+    }
+
+    /** Rebuilds the findings table from StateManager, preserving the current selection by id. */
+    private fun rebuildFindingsTable() {
+        val selectedId = runCatching {
+            val vr = findingsTable.selectedRow
+            if (vr >= 0) findingsTableModel.getValueAt(findingsTable.convertRowIndexToModel(vr), 0)?.toString() else null
+        }.getOrNull()
+
+        SwingUtilities.invokeLater {
+            findingsCache.clear()
+            findingsTableModel.rowCount = 0
+            for (f in stateManager.findings.filter { passesFindingsFilter(it) }) {
+                findingsCache.add(f)
+                val time = try {
+                    LocalDateTime.ofInstant(Instant.parse(f.createdAt), ZoneId.systemDefault()).format(FINDING_TIME_FORMAT)
+                } catch (_: Exception) { f.createdAt.takeLast(12) }
+                findingsTableModel.addRow(arrayOf<Any?>(
+                    f.id, f.severity.ifEmpty { "-" }, f.cvssScore.ifEmpty { "-" }, f.type,
+                    f.owaspCategory, f.url, f.location.ifEmpty { "-" }, time
+                ))
+            }
+            findingsSnapshot = stateManager.findings.map { it.id }
+            findingsCountLabel.text = "Findings: ${stateManager.findings.size}"
+            // Restore selection if the row survived the rebuild
+            if (selectedId != null) {
+                val row = (0 until findingsTableModel.rowCount).firstOrNull {
+                    findingsTableModel.getValueAt(it, 0)?.toString() == selectedId
+                }
+                if (row != null && row < findingsTable.rowCount) findingsTable.setRowSelectionInterval(row, row)
+            }
+        }
+    }
+
+    /**
+     * Timer hook: rebuild only when the underlying findings list actually changed,
+     * so an operator reading the tab never has their selection reset every 1.5 s.
+     */
+    private fun refreshFindingsTab() {
+        val ids = stateManager.findings.map { it.id }
+        if (ids != findingsSnapshot) rebuildFindingsTable()
+    }
+
+    private fun findingAt(modelRow: Int): StoredFinding? =
+        if (modelRow in 0 until findingsCache.size) findingsCache[modelRow] else null
+
+    private fun showFindingDetail() {
+        val vr = findingsTable.selectedRow; if (vr < 0) return
+        val f = findingAt(findingsTable.convertRowIndexToModel(vr)) ?: return
+        val sb = StringBuilder()
+        sb.appendLine("ID: ${f.id}")
+        sb.appendLine("Type: ${f.type}")
+        sb.appendLine("Severity: ${f.severity}")
+        if (f.cvssScore.isNotEmpty() || f.cvssVector.isNotEmpty()) {
+            sb.appendLine("CVSS: ${f.cvssScore.ifEmpty { "-" }}${if (f.cvssVector.isNotEmpty()) "  (${f.cvssVector})" else ""}")
+        }
+        if (f.owaspCategory.isNotEmpty()) sb.appendLine("OWASP 2021: ${f.owaspCategory}")
+        sb.appendLine("URL: ${f.url}")
+        sb.appendLine("Location: ${f.location}")
+        sb.appendLine("Created: ${f.createdAt}")
+        sb.appendLine()
+        sb.appendLine("Detail:")
+        sb.appendLine(f.detail.ifEmpty { "(none)" })
+        if (f.stepsToReproduce.isNotEmpty()) {
+            sb.appendLine()
+            sb.appendLine("Steps to reproduce:")
+            sb.appendLine(f.stepsToReproduce)
+        }
+        sb.appendLine()
+        sb.appendLine("Evidence:")
+        sb.appendLine(f.evidence.ifEmpty { "(none)" })
+        findingsDetailArea.text = sb.toString()
+        findingsDetailArea.caretPosition = 0
+
+        // Recorded evidence viewers. Service is derived from the finding URL; a raw
+        // fallback covers non-URL entries. Both editors simply stay on the previous
+        // item when the finding carries no evidence for them.
+        try {
+            if (f.request.isNotEmpty()) {
+                val req = try {
+                    HttpRequest.httpRequest(burp.api.montoya.http.HttpService.httpService(f.url), f.request)
+                } catch (_: Exception) {
+                    HttpRequest.httpRequest(f.request)
+                }
+                findingsRequestEditor.setRequest(req)
+            }
+        } catch (_: Exception) {}
+        try {
+            if (f.response.isNotEmpty()) findingsResponseEditor.setResponse(HttpResponse.httpResponse(f.response))
+        } catch (_: Exception) {}
+    }
+
+    private fun showFindingsContextMenu(viewRow: Int, e: MouseEvent) {
+        val mr = findingsTable.convertRowIndexToModel(viewRow)
+        val f = findingAt(mr) ?: return
+        val menu = JPopupMenu()
+        if (f.url.isNotEmpty()) menu.add(JMenuItem("Copy URL").apply { addActionListener { copyToClipboard(f.url) } })
+        menu.add(JMenuItem("Copy Finding JSON").apply {
+            addActionListener {
+                copyToClipboard(
+                    buildJsonObject {
+                        put("id", f.id); put("type", f.type); put("severity", f.severity)
+                        put("url", f.url); put("location", f.location); put("detail", f.detail)
+                        put("evidence", f.evidence)
+                        put("cvss_score", f.cvssScore); put("cvss_vector", f.cvssVector)
+                        put("owasp_category", f.owaspCategory); put("steps_to_reproduce", f.stepsToReproduce)
+                        put("request", f.request); put("response", f.response)
+                        put("created_at", f.createdAt)
+                    }.toString()
+                )
+            }
+        })
+        menu.addSeparator()
+        menu.add(JMenuItem("Delete Finding").apply {
+            addActionListener {
+                stateManager.findings.removeIf { it.id == f.id }
+                syncFindingsStore()
+                rebuildFindingsTable()
+            }
+        })
+        menu.show(e.component, e.x, e.y)
+    }
+
+    /**
+     * Operator-side mutations (delete / clear) bypass FindingsBridge, so they must
+     * rewrite the durable store themselves — otherwise a deleted finding reappears
+     * after the next extension reload.
+     */
+    private fun syncFindingsStore() {
+        FindingsStore.replaceProject(currentProject(), stateManager.findings.toList())
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //  TAB 5: COLLABORATOR
     // ═══════════════════════════════════════════════════════════════════════
 
     private fun buildCollaboratorTab(): JPanel {
@@ -805,7 +1086,7 @@ class BurpMcpUltraTab(
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    //  TAB 5: RULES MANAGER
+    //  TAB 6: RULES MANAGER
     // ═══════════════════════════════════════════════════════════════════════
 
     private lateinit var proxyRulesModel: DefaultTableModel
@@ -899,7 +1180,7 @@ class BurpMcpUltraTab(
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    //  TAB 6: SERVER
+    //  TAB 7: SERVER
     // ═══════════════════════════════════════════════════════════════════════
 
     private lateinit var serverUptimeLabel: JLabel
@@ -1181,14 +1462,35 @@ class BurpMcpUltraTab(
     }
 
     private class SeverityRenderer : DefaultTableCellRenderer() {
+        init { horizontalAlignment = CENTER }
         override fun getTableCellRendererComponent(t: JTable, v: Any?, s: Boolean, f: Boolean, r: Int, c: Int): Component {
             val comp = super.getTableCellRendererComponent(t, v, s, f, r, c)
             if (!s) foreground = when (v?.toString()?.uppercase()) {
+                "CRITICAL" -> Color(0xE5, 0x3E, 0x3E)
                 "HIGH" -> Color(0xF8, 0x51, 0x49); "MEDIUM" -> Color(0xD2, 0x99, 0x22)
-                "LOW" -> Color(0x58, 0xA6, 0xFF); "INFORMATION" -> Color.GRAY
+                "LOW" -> Color(0x58, 0xA6, 0xFF)
+                "INFORMATION", "INFO" -> Color.GRAY
                 else -> t.foreground
             }
             font = font.deriveFont(Font.BOLD)
+            return comp
+        }
+    }
+
+    /** Colors a CVSS score cell by qualitative band (0–10 scale; blank stays muted). */
+    private class CvssRenderer : DefaultTableCellRenderer() {
+        init { horizontalAlignment = CENTER }
+        override fun getTableCellRendererComponent(t: JTable, v: Any?, s: Boolean, f: Boolean, r: Int, c: Int): Component {
+            val comp = super.getTableCellRendererComponent(t, v, s, f, r, c)
+            val score = v?.toString()?.trim()?.toDoubleOrNull()
+            if (!s) foreground = when {
+                score == null -> Color.GRAY
+                score >= 9.0 -> Color(0xE5, 0x3E, 0x3E)   // critical band
+                score >= 7.0 -> Color(0xF8, 0x51, 0x49)   // high
+                score >= 4.0 -> Color(0xD2, 0x99, 0x22)   // medium
+                else -> Color(0x58, 0xA6, 0xFF)           // low
+            }
+            if (score != null) font = font.deriveFont(Font.BOLD)
             return comp
         }
     }
