@@ -870,8 +870,9 @@ class HttpBridge(
         // inputs so a stray newline — commonly emitted by an LLM — can't reach the HTTP/2 :path or
         // split a header and get the request "kettled" / RST_STREAM'd (PROTOCOL_ERROR) by the server.
         // The url-only path (buildFromUrlMontoya → httpRequestFromUrl) previously passed the raw url
-        // straight through. raw_request / http_send_raw_bytes stay verbatim so intentional CRLF
-        // (request-smuggling research) still works. RequestHygiene.scan still surfaces a warning.
+        // straight through. raw_request gets LF→CRLF normalization (buildFromRawRequest) so bare-LF
+        // agent output parses; only http_send_raw_bytes stays byte-verbatim for intentional
+        // request-smuggling research. RequestHygiene.scan still surfaces a warning.
         val cUrl = url?.let { RequestHygiene.stripControl(it) }
         val cMethod = method?.let { RequestHygiene.stripControl(it) }
         val cHeaders = headers?.entries?.associate {
@@ -911,7 +912,15 @@ class HttpBridge(
         useTls: Boolean?,
         autoFixContentLength: Boolean
     ): HttpRequest {
-        val cleaned = if (autoFixContentLength) fixContentLength(rawRequest) else rawRequest
+        // Issue #7 (request-line variant): LLMs commonly emit raw requests with bare-LF line
+        // endings. Montoya cannot delimit the request line then, so the whole message folds
+        // into the HTTP/2 :path and the request gets kettled / RST_STREAM'd. Normalizing
+        // LF→CRLF is lossless for deliberate CRLF (smuggling research keeps its \r\n, and
+        // byte-level work belongs to http_send_raw_bytes, which stays verbatim). It must run
+        // BEFORE fixContentLength — that helper keys on "\r\n\r\n" and silently no-ops on
+        // bare-LF input.
+        val normalized = RequestHygiene.normalizeCrlf(rawRequest)
+        val cleaned = if (autoFixContentLength) fixContentLength(normalized) else normalized
 
         val resolvedHost = host ?: Regex("(?i)^Host:\\s*([^:\\r\\n]+)", RegexOption.MULTILINE)
             .find(cleaned)?.groupValues?.get(1)?.trim()
