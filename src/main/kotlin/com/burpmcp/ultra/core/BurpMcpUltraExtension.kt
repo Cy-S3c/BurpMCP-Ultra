@@ -5,6 +5,7 @@ import burp.api.montoya.MontoyaApi
 import com.burpmcp.ultra.transport.ActivityStore
 import com.burpmcp.ultra.transport.AuditLog
 import com.burpmcp.ultra.transport.BindHostPolicy
+import com.burpmcp.ultra.transport.FindingsStore
 import com.burpmcp.ultra.transport.McpServerManager
 import com.burpmcp.ultra.transport.DashboardServer
 import com.burpmcp.ultra.transport.PortPolicy
@@ -70,6 +71,23 @@ class BurpMcpUltraExtension : BurpExtension {
             stateManager.mcpActivityListeners.add { entry -> ActivityStore.append(entry, projectName) }
         } catch (e: Exception) {
             api.logging().logToError("BurpMCP-Ultra: activity restore failed: ${e.message}")
+        }
+
+        // Restore the agent's findings working memory from its durable store. Without this,
+        // findings only lived in memory and were wiped by cleanup() on every extension
+        // reload/Burp restart — while the (persisted) MCP activity log still showed the
+        // historical findings_add calls, making it look like the findings vanished for no
+        // reason. FindingsBridge.add() appends new ones via the listener below.
+        try {
+            val projectName = try { api.project().name() } catch (_: Exception) { "" }
+            val restoredFindings = FindingsStore.load(projectName)
+            if (restoredFindings.isNotEmpty()) stateManager.restoreFindings(restoredFindings)
+            stateManager.findingsListeners.add { f -> FindingsStore.append(f, projectName) }
+            api.logging().logToOutput(
+                "BurpMCP-Ultra: restored ${restoredFindings.size} agent finding(s) (project: ${projectName.ifEmpty { "default" }}); store → ${FindingsStore.path()}"
+            )
+        } catch (e: Exception) {
+            api.logging().logToError("BurpMCP-Ultra: findings restore failed: ${e.message}")
         }
 
         // Auth token shared by all three local servers. Required on every request

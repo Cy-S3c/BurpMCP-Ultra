@@ -250,6 +250,12 @@ data class McpActivityEntry(
  * of confirmed/suspected issues, independent of Burp's native scanner issues.
  *
  * @property location Where the issue lives (e.g. "param:id", "header:X", "body").
+ * @property cvssScore Numeric CVSS score as text ("" or "0.0"–"10.0").
+ * @property cvssVector CVSS vector string (e.g. "CVSS:3.1/AV:N/AC:L/...").
+ * @property owaspCategory OWASP Top 10 2021 category (normalized canonical form).
+ * @property stepsToReproduce Ordered reproduction steps.
+ * @property request Raw HTTP request evidence.
+ * @property response Raw HTTP response evidence.
  */
 data class StoredFinding(
     val id: String,
@@ -259,7 +265,13 @@ data class StoredFinding(
     val location: String,
     val detail: String,
     val evidence: String,
-    val createdAt: String
+    val createdAt: String,
+    val cvssScore: String = "",
+    val cvssVector: String = "",
+    val owaspCategory: String = "",
+    val stepsToReproduce: String = "",
+    val request: String = "",
+    val response: String = ""
 )
 
 /**
@@ -290,6 +302,30 @@ class StateManager {
 
     /** Agent-recorded structured findings (deduplicated working memory). */
     val findings = CopyOnWriteArrayList<StoredFinding>()
+
+    /** Listeners notified when the agent records a finding (durable persistence). */
+    val findingsListeners = CopyOnWriteArrayList<(StoredFinding) -> Unit>()
+
+    /** Adds a recorded finding and notifies [findingsListeners] (e.g. the durable store). */
+    fun addFinding(f: StoredFinding) {
+        findings.add(f)
+        findingsListeners.forEach { listener ->
+            try { listener(f) } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * Seeds the findings from the durable store on startup WITHOUT notifying
+     * persistence listeners, and continues the shared id counter past the restored
+     * numeric suffixes so subsequent generated ids never collide with restored ones.
+     */
+    fun restoreFindings(list: List<StoredFinding>) {
+        findings.addAll(list)
+        val maxSuffix = list.maxOfOrNull {
+            it.id.substringAfterLast('-').toLongOrNull() ?: 0L
+        } ?: 0L
+        if (maxSuffix > idCounter.get()) idCounter.set(maxSuffix)
+    }
 
     /** Names of dynamically registered scan check extensions. */
     val registeredScanChecks = CopyOnWriteArrayList<String>()
