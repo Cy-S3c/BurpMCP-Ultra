@@ -4,6 +4,30 @@ All notable changes to BurpMCP-Ultra are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 [Semantic Versioning](https://semver.org/) (see `docs/ROADMAP.md` for the semver convention).
 
+## [2.3.2] — 2026-09-26 — Credential redaction & CJK-safe fonts
+
+Theme: two community-reported fixes — live credentials no longer enter the agent's context by
+default from proxy history, and Chinese text no longer renders as tofu boxes.
+
+### Fixed
+- **`proxy_history` / `proxy_history_search` leaked credential request headers** ([#20](https://github.com/Cy-S3c/BurpMCP-Ultra/issues/20),
+  reported by **@bananacake0** — thank you for the precise repro). `request_headers` was serialized
+  unconditionally with **full values**, regardless of `include_request`/`include_response`, so a live
+  `Cookie` / `Authorization` entered the LLM's context on an ordinary recon query with no opt-out.
+  Header **names** (and the shape of the header set) are still always returned — that's what recon
+  needs — but the **values** of sensitive headers (`Authorization`, `Proxy-Authorization`, `Cookie`,
+  `Cookie2`, `Set-Cookie`, `X-API-Key`, `X-Auth-Token`, `X-Session-Token`,
+  `X-Amz-Security-Token`, `X-CSRF-Token`, `X-XSRF-Token`) are replaced by `<redacted>` unless the
+  caller passes `include_request=true` (which returns the full raw request text anyway — no
+  capability lost, now documented in the tool schema). New pure `SensitiveHeaders` helper (+tests).
+- **中文乱码 — Chinese text rendered as tofu boxes (□□) in the extension tabs**
+  ([#17](https://github.com/Cy-S3c/BurpMCP-Ultra/issues/17), reported by **@Ckaedy**). `UiTheme`
+  forced the physical font families `"Segoe UI"` / `"JetBrains Mono"` under the assumption that a
+  missing family "falls back automatically" — it doesn't: a physical family has no per-glyph
+  fallback, so any CJK text in a themed component had no glyphs to render (Burp's own UI was fine,
+  which made it look random). The theme now uses the logical fonts `Dialog` / `Monospaced`, which
+  map through the JDK's fontconfig composite with CJK fallback on every platform.
+
 ## [2.3.1] — 2026-09-16 — The agent's findings, rendered in Burp — and durable
 
 Theme: a native **Findings** tab that shows what the agent records via `findings_add`, a durable
