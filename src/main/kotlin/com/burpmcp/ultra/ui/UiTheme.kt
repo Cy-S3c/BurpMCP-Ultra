@@ -28,9 +28,16 @@ object UiTheme {
     val ERROR = Color(0xF8, 0x51, 0x49)
     val INFO = Color(0x58, 0xA6, 0xFF)
 
-    // ── Fonts (fall back automatically if the family is absent) ─────────────────
-    fun ui(size: Int, style: Int = Font.PLAIN): Font = Font("Segoe UI", style, size)
-    fun mono(size: Int, style: Int = Font.PLAIN): Font = Font("JetBrains Mono", style, size)
+    // ── Fonts ──────────────────────────────────────────────────────────────────
+    // Issue #17 (中文乱码): these used to force the physical families "Segoe UI" /
+    // "JetBrains Mono" on the assumption that absent families "fall back automatically".
+    // They don't — a physical family has no per-glyph fallback, so on machines where the
+    // family is missing (or lacks CJK glyphs, which both of these do), Chinese text
+    // rendered as tofu boxes (□□) while Burp's own UI was fine. Logical font names map
+    // through the JDK's fontconfig composite on every platform and carry CJK fallback,
+    // so they are the safe choice for anything that may display user-language text.
+    fun ui(size: Int, style: Int = Font.PLAIN): Font = Font("Dialog", style, size)
+    fun mono(size: Int, style: Int = Font.PLAIN): Font = Font("Monospaced", style, size)
 
     private val labelDefault: Color? = UIManager.getColor("Label.foreground")
 
