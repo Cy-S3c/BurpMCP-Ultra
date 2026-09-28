@@ -3,6 +3,7 @@ package com.burpmcp.ultra.bridge
 import burp.api.montoya.MontoyaApi
 import com.burpmcp.ultra.core.BodyText
 import com.burpmcp.ultra.core.ProxyHistorySearch
+import com.burpmcp.ultra.core.SensitiveHeaders
 import com.burpmcp.ultra.core.StatusCodeRange
 import com.burpmcp.ultra.core.HighlightColorName
 import burp.api.montoya.core.Annotations
@@ -775,13 +776,15 @@ class ProxyBridge(
                 if (ann.hasHighlightColor()) put("highlight", ann.highlightColor().name)
             } catch (_: Exception) { }
 
-            // Request headers
+            // Request headers — names/shape always preserved for recon; the VALUES of
+            // credential-bearing headers (Cookie, Authorization, …) are redacted unless the
+            // caller explicitly requested full request material (issue #20).
             try {
                 put("request_headers", buildJsonArray {
                     item.request().headers().forEach { h ->
                         add(buildJsonObject {
                             put("name", h.name())
-                            put("value", h.value())
+                            put("value", SensitiveHeaders.value(h.name(), h.value(), includeRequest))
                         })
                     }
                 })

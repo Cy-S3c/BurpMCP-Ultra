@@ -36,7 +36,7 @@ object ProxyTools {
                     putJsonObject("status_code") { put("type", "integer"); put("description", "Filter by exact status code") }
                     putJsonObject("status_code_range") { put("type", "string"); put("description", "Filter by status code range") }
                     putJsonObject("mime_type") { put("type", "string"); put("description", "Filter by MIME type") }
-                    putJsonObject("include_request") { put("type", "boolean"); put("description", "Include full request text (default false)") }
+                    putJsonObject("include_request") { put("type", "boolean"); put("description", "Include full request text (default false). Also unmasks sensitive request header values (Cookie, Authorization, …) which are otherwise redacted in request_headers") }
                     putJsonObject("include_response") { put("type", "boolean"); put("description", "Include full response text (default false)") }
                     putJsonObject("in_scope_only") { put("type", "boolean"); put("description", "Restrict to in-scope items (default false)") }
                     putJsonObject("max_response_length") { put("type", "integer"); put("description", "Truncate response text to this length") }
@@ -86,7 +86,7 @@ object ProxyTools {
                     putJsonObject("case_sensitive") { put("type", "boolean"); put("description", "Case-sensitive matching (default false)") }
                     putJsonObject("max_results") { put("type", "integer"); put("description", "Maximum number of results (default 100)") }
                     putJsonObject("in_scope_only") { put("type", "boolean"); put("description", "Restrict to in-scope items (default false)") }
-                    putJsonObject("include_request") { put("type", "boolean"); put("description", "Include full request text (default false)") }
+                    putJsonObject("include_request") { put("type", "boolean"); put("description", "Include full request text (default false). Also unmasks sensitive request header values (Cookie, Authorization, …) which are otherwise redacted in request_headers") }
                     putJsonObject("include_response") { put("type", "boolean"); put("description", "Include full response text (default false)") }
                     putJsonObject("max_response_length") { put("type", "integer"); put("description", "Truncate response text to this length") }
                 },
